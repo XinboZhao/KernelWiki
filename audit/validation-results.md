@@ -44,3 +44,16 @@ again after the clean-round quorum.
 Rounds 31 and 32 are consecutive exact-model clean reviews. The independent
 review quorum is complete at 2/2, and this matrix is the required final rerun
 after quorum.
+
+## Optional repository import extension
+
+Current discovery includes 189 tests: the historical 158-test baseline plus
+repository-import regression tests. The historical results above remain dated
+records; extension validation is recorded separately below.
+
+Extension validation: `python3 -m unittest discover -s tests -p 'test_*.py'`
+passed with 189 tests. The optional importer also passes the existing offline
+freshness and YAML fallback checks, full page validation, index regeneration,
+and the size gate (approximately 24.15 MiB / 25 MiB). No GPU execution or
+model invocation is performed by this test suite. Public presets require
+separate reviewed snapshots; none is enabled by default.

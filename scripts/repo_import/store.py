@@ -1,0 +1,42 @@
+"""Persistent records and recoverable writes."""
+import hashlib
+import json
+import os
+from pathlib import Path
+
+from _yaml_compat import yaml
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+
+
+def file_hash(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
+def read(path, default=None):
+    if not path.exists():
+        return {} if default is None else default
+    return yaml.safe_load(path.read_text()) or ({} if default is None else default)
+
+
+def atomic_write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.tmp')
+    with temporary.open('w', encoding='utf-8') as stream:
+        stream.write(text)
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+
+
+def write(path, value):
+    atomic_write(path, yaml.safe_dump(value, sort_keys=False))
+
+
+def contained(root, relative):
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root.resolve()) or path == root.resolve():
+        raise ValueError(f'Path escapes root: {relative}')
+    return path

@@ -514,7 +514,13 @@ class ShippedDocumentationContractTests(unittest.TestCase):
         )
         bundles = len(list((ROOT / "artifacts").rglob("PROVENANCE.yaml")))
 
-        self.assertEqual(158, discovered_tests)
+        baseline_tests = sum(
+            len(re.findall(r"^\s+def test_", path.read_text(encoding="utf-8"), re.MULTILINE))
+            for path in (ROOT / "tests").glob("test_*.py")
+            if not path.name.startswith("test_repo_import") and path.name != "test_kernel_entries.py"
+        )
+        self.assertEqual(158, baseline_tests)
+        self.assertGreater(discovered_tests, baseline_tests)
         for path in (ROOT / "audit/regression-tests.md", ROOT / "audit/validation-results.md"):
             self.assertIn(f"{discovered_tests} tests", path.read_text(encoding="utf-8"))
         for path in (

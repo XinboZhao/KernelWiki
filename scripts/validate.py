@@ -474,6 +474,8 @@ def detect_page_type(filepath, fm):
     if parts[0] == "sources":
         if parts[1] == "prs":
             return "source-pr"
+        elif parts[1] == "repos":
+            return "source-repo"
         elif parts[1] == "docs":
             return "source-doc"
         elif parts[1] == "blogs":
@@ -660,6 +662,8 @@ def validate_file(filepath, schemas, valid_tags, all_source_ids, code_langs):
         return errors
 
     constraints = schema.get("constraints", {})
+    if page_type == "source-repo" and not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", str(fm.get("commit", ""))):
+        errors.append(f"{rel}: repository snapshot requires a full Git commit ID")
 
     # Check required fields
     for field in schema.get("required", []):
@@ -2000,7 +2004,8 @@ def main():
     tags = load_yaml_file(DATA_DIR / "tags.yaml")
     schemas = load_yaml_file(DATA_DIR / "schemas.yaml")
 
-    all_errors = []
+    from repo_import.publish import registry_errors
+    all_errors = registry_errors(REPO_ROOT)
     file_count = 0
     ids_seen = {}
 

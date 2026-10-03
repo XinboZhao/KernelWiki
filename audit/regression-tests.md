@@ -149,3 +149,16 @@ unknown architecture dispositions. Candidate and scope row sets match exactly.
 The generated-manifest verifier additionally regenerates `core-prs.yaml`,
 `cute-dsl-universe.yaml`, and `triton-universe.yaml` in memory and compares
 bytes. Current result: **pass**, 110 core PRs, checksum `cde1aab41b70…`.
+
+## Optional repository import extension
+
+Current discovery includes 189 tests: the historical 158-test baseline plus
+repository-import regression tests. The historical results above remain dated
+records; extension validation is recorded separately below.
+
+Extension validation: `python3 -m unittest discover -s tests -p 'test_*.py'`
+passed with 189 tests. The optional importer also passes the existing offline
+freshness and YAML fallback checks, full page validation, index regeneration,
+and the size gate (approximately 24.15 MiB / 25 MiB). No GPU execution or
+model invocation is performed by this test suite. Public presets require
+separate reviewed snapshots; none is enabled by default.

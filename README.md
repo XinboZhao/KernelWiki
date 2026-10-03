@@ -200,3 +200,17 @@ KernelWiki/                             (= ~/.claude/skills/KernelWiki/)
 ## License
 
 Summaries and wiki syntheses in this repository are derivative works citing upstream PRs, blogs, and docs. The tooling (`scripts/`, `references/`, `data/`) is MIT-style; see individual files for any exceptions.
+
+## Optional repository kernel import
+
+Import a Git URL or local committed repository through explicit preparation,
+external review, and deterministic publication. The importer never calls an AI
+model. See [the workflow](references/repo-import.md) and
+[the external review guide](references/repo-import-review.md).
+
+```bash
+python3 scripts/import_repo.py prepare --repo /path/to/repo --revision HEAD
+# External agent fills the generated decisions.yaml.
+python3 scripts/import_repo.py build --run <run-id>
+python3 scripts/import_repo.py apply --run <run-id>
+```
