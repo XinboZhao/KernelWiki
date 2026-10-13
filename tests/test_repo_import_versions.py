@@ -58,7 +58,7 @@ class VersionTests(unittest.TestCase):
             write(wiki / 'data/repo-import/registry.yaml', data)
             self.assertTrue(any('cyclic' in error for error in registry_errors(wiki)))
 
-    def test_new_version_keeps_old_receipts_and_independent_reproducibility(self):
+    def test_new_version_keeps_compact_history_and_independent_reproducibility(self):
         from repo_import_support import admission
         from repo_import.publish import apply_plan
         with tempfile.TemporaryDirectory() as directory:
@@ -76,11 +76,32 @@ class VersionTests(unittest.TestCase):
             new_request = read(new_run / 'review-request.yaml')
             decision = admission(new_request)
             decision.update(action='extend_page', relation='new_version', target_implementation_id=identity,
-                            target_page_id=implementation['page_id'], target_version_id=old_id)
+                            target_page_id=implementation['page_id'], target_version_id=old_id,
+                            selection_reason='Choose the changed implementation for this fixture.')
+            from repo_import_support import resolve_review
+            resolve_review(new_request, decision, 'same_implementation')
             write(new_run / 'decisions.yaml', document(new_request, decision))
             import_repo.build(wiki, new_run)
             updated = read(new_run / 'staging/data/repo-import/registry.yaml')['implementations'][identity]
-            self.assertEqual(2, len(updated['versions']))
-            self.assertEqual(implementation['versions'][old_id], updated['versions'][old_id])
+            self.assertEqual(1, len(updated['versions']))
+            self.assertEqual(implementation['versions'][old_id]['candidate']['content_digest'], updated['history'][old_id]['content_digest'])
+            self.assertNotIn('candidate', updated['history'][old_id])
             self.assertEqual(old_id, updated['versions'][updated['current_version']]['relation']['target'])
             self.assertEqual('snippet', updated['versions'][updated['current_version']]['metadata']['reproducibility'])
+            new_plan = read(new_run / 'publication-plan.yaml')
+            new_plan['validated_digest'] = digest(new_plan['files'])
+            apply_plan(wiki, new_run, new_plan)
+            (repo / 'kernel.py').write_text((repo / 'kernel.py').read_text().replace('x * n', 'x + n'))
+            commit(repo, 'restore prior representative')
+            restored_run = import_repo.prepare(wiki, str(repo), 'HEAD', load_config(wiki))
+            restored_request = read(restored_run / 'review-request.yaml')
+            restored = admission(restored_request)
+            restored.update(action='extend_page', relation='new_version', target_implementation_id=identity,
+                            target_page_id=implementation['page_id'], target_version_id=updated['current_version'],
+                            selection_reason='Select the older code after comparing current evidence.')
+            resolve_review(restored_request, restored, 'same_implementation')
+            write(restored_run / 'decisions.yaml', document(restored_request, restored))
+            restored_plan = import_repo.build(wiki, restored_run)
+            restored_plan['validated_digest'] = digest(restored_plan['files'])
+            apply_plan(wiki, restored_run, restored_plan)
+            self.assertEqual([], registry_errors(wiki))

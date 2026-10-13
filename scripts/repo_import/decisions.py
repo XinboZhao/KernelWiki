@@ -1,13 +1,130 @@
 """Read externally authored decisions. No model execution or prompt loading."""
 from pathlib import Path
 from .store import digest, file_hash, contained
+from .match import overlap_index
 
-ACTIONS = {'create_page', 'extend_page', 'record_duplicate', 'attach_source'}
+ACTIONS = {'create_page', 'extend_page', 'record_duplicate', 'attach_source', 'retain_page', 'merge_candidate'}
 RELATIONS = {'distinct', 'new_version', 'variant', 'exact_duplicate'}
 
 
 def decision_key(candidate):
     return candidate['content_digest']
+
+
+def reuse_distinct_comparisons(previous, hints):
+    """An unchanged match ID binds both candidate snapshots and the target receipt."""
+    from copy import deepcopy
+    current_batch = {hint['match_id'] for hint in hints if hint['kind'] == 'batch'}
+    return [deepcopy(resolution) for resolution in previous.get('overlap_resolutions', [])
+            if resolution['match_id'] in current_batch and resolution.get('outcome') == 'distinct']
+
+
+def validate_target_evidence(decision, root):
+    if not decision.get('equivalence_basis') or not decision.get('target_evidence'):
+        raise ValueError('Explicit equivalence requires target evidence and a basis')
+    for evidence in decision['target_evidence']:
+        if not (evidence['path'].startswith('wiki/') or evidence['path'].startswith('artifacts/')):
+            raise ValueError('Target evidence must be existing wiki content or code assets')
+        path = contained(root, evidence['path'])
+        if evidence.get('sha256') != file_hash(path) or not evidence.get('locator'):
+            raise ValueError('Invalid target evidence receipt')
+
+
+def reuse_record(candidate, previous, request, hints):
+    if previous.get('action') not in {'retain_page', 'attach_source', 'merge_candidate'}:
+        return None
+    for identity, item in request['registry']['implementations'].items():
+        if previous.get('target_implementation_id') and previous['target_implementation_id'] != identity:
+            continue
+        if previous.get('target_page_id') and previous['target_page_id'] != item['page_id']:
+            continue
+        if previous.get('target_version_id') and previous['target_version_id'] != item['current_version']:
+            continue
+        known = any(record['content_digest'] == candidate['content_digest'] and
+                    record['origin']['repo_id'] == candidate['origin']['repo_id'] and
+                    record['representative'] == item['current_version'] for record in item.get('records', []))
+        if not known:
+            continue
+        page = next(page for page in request['existing_pages'] if page['page_id'] == item['page_id'])
+        return {**previous, 'candidate_id': candidate['candidate_id'],
+                'action': 'record_duplicate' if previous['relation'] == 'exact_duplicate' else 'retain_page',
+                'target_implementation_id': identity, 'target_page_id': item['page_id'],
+                'target_version_id': item['current_version'],
+                'equivalence_basis': previous.get('equivalence_basis', 'Unchanged previously reviewed relationship and representative.'),
+                'target_evidence': [{'path': page['path'], 'sha256': page['sha256'], 'locator': item['page_id']}],
+                'overlap_resolutions': [
+                    {'match_id': hint['match_id'], 'outcome': 'same_implementation',
+                     'representative': item['page_id'], 'evidence': [hint['evidence']],
+                     'rationale': 'Unchanged reviewed relationship; retain the same representative.'}
+                    for hint in hints if hint.get('page_id') == item['page_id'] and hint['kind'] in {'registry', 'kernel'}]
+                    + reuse_distinct_comparisons(previous, hints)}
+    return None
+
+
+def unresolved_overlaps(decision, hints, decisions, root, checkout, all_hints):
+    resolutions = {item['match_id']: item for item in decision.get('overlap_resolutions', [])}
+    if len(resolutions) != len(decision.get('overlap_resolutions', [])):
+        raise ValueError('Duplicate overlap resolution')
+    if set(resolutions) - {hint['match_id'] for hint in hints}:
+        raise ValueError('Unknown overlap resolution; prepare current materials')
+    blocked = False
+    for hint in hints:
+        resolution = resolutions.get(hint['match_id'])
+        if not resolution or resolution.get('outcome') not in {'distinct', 'same_implementation'}:
+            blocked = True
+            continue
+        if not resolution.get('rationale') or not resolution.get('evidence'):
+            blocked = True
+            continue
+        expected = hint['evidence']
+        evidence = resolution['evidence']
+        if not any(item.get('path') == expected['path'] and item.get('sha256') == expected['sha256'] for item in evidence):
+            raise ValueError('Overlap resolution must cite the matched evidence')
+        for receipt in evidence:
+            path = contained(checkout if hint['kind'] == 'batch' else root, receipt['path'])
+            if receipt.get('sha256') != file_hash(path) or not receipt.get('locator'):
+                raise ValueError('Invalid overlap evidence receipt')
+        if hint['kind'] == 'batch':
+            other = decisions.get(hint['candidate_id'], {})
+            reciprocal_ids = {item['match_id'] for item in all_hints[hint['candidate_id']]
+                              if item['kind'] == 'batch' and item['candidate_id'] == decision['candidate_id']}
+            reciprocal = next((item for item in other.get('overlap_resolutions', []) if item['match_id'] in reciprocal_ids), None)
+            if other.get('decision') == 'include' and reciprocal and (
+                    reciprocal.get('outcome') != resolution['outcome'] or
+                    (resolution['outcome'] == 'same_implementation' and reciprocal.get('representative') != resolution.get('representative'))):
+                blocked = True
+        if resolution['outcome'] == 'distinct':
+            if hint['kind'] == 'batch':
+                other = decisions.get(hint['candidate_id'], {})
+                if other.get('action') == 'merge_candidate' and other.get('target_candidate_id') == decision['candidate_id']:
+                    blocked = True
+            continue
+        representative = resolution.get('representative')
+        if hint['kind'] == 'batch':
+            other = decisions.get(hint['candidate_id'], {})
+            if representative == decision['candidate_id']:
+                if other.get('decision') == 'include' and not (
+                        other.get('action') == 'merge_candidate' and other.get('target_candidate_id') == representative):
+                    blocked = True
+            elif representative == hint['candidate_id']:
+                if decision.get('action') != 'merge_candidate' or decision.get('target_candidate_id') != representative:
+                    blocked = True
+            else:
+                blocked = True
+        elif hint['kind'] == 'pr':
+            linked = hint.get('kernel_pages', [])
+            if linked:
+                if decision.get('target_page_id') not in linked or decision.get('action') == 'create_page':
+                    blocked = True
+            elif decision.get('action') == 'create_page' and representative != decision['candidate_id']:
+                blocked = True
+        else:
+            if decision.get('target_page_id') != hint['page_id'] or decision.get('action') == 'create_page':
+                blocked = True
+            expected_representative = decision['candidate_id'] if decision.get('action') == 'extend_page' else hint['page_id']
+            if representative != expected_representative:
+                blocked = True
+    return blocked
 
 
 def validate_decisions(document, request, root, checkout):
@@ -18,6 +135,9 @@ def validate_decisions(document, request, root, checkout):
     candidates = {item['candidate_id']: item for item in request['candidates']}
     pages = {item['page_id']: item for item in request['existing_pages']}
     implementations = request['registry'].get('implementations', {})
+    hints = overlap_index(request['candidates'], request['registry'], request['existing_pages'])
+    decisions = {item.get('candidate_id'): item for item in document.get('decisions', [])}
+    blocked = set()
     selected, seen = [], set()
     for decision in document.get('decisions', []):
         identity = decision.get('candidate_id')
@@ -39,45 +159,61 @@ def validate_decisions(document, request, root, checkout):
                 raise ValueError('Invalid evidence receipt')
         if decision['decision'] != 'include':
             continue
+        if unresolved_overlaps(decision, hints[identity], decisions, root, checkout, hints):
+            blocked.add(identity)
+            continue
         action, relation = decision.get('action'), decision.get('relation')
         if action not in ACTIONS or relation not in RELATIONS:
             raise ValueError('Invalid publication action or relation')
         if (action == 'create_page') != (relation == 'distinct'):
             raise ValueError('Distinct implementations must create pages; versions must target an existing implementation')
-        if (action in {'record_duplicate', 'attach_source'}) != (relation == 'exact_duplicate'):
+        if action != 'merge_candidate' and (action in {'record_duplicate', 'attach_source'}) != (relation == 'exact_duplicate'):
             raise ValueError('Duplicates must use record_duplicate')
         target = decision.get('target_implementation_id')
-        if action == 'attach_source':
+        if action == 'merge_candidate':
+            other = decisions.get(decision.get('target_candidate_id'), {})
+            if other.get('decision') != 'include' or other.get('action') not in {'create_page', 'extend_page', 'attach_source', 'retain_page', 'record_duplicate'}:
+                raise ValueError('Batch merge must target an included representative, not another merge')
+            if other['candidate_id'] == identity:
+                raise ValueError('A candidate cannot merge into itself')
+        elif action == 'attach_source' or (action == 'retain_page' and target not in implementations):
+            if target is not None:
+                raise ValueError('Unregistered existing-page attribution must not specify a target implementation')
             if decision.get('target_page_id') not in pages:
                 raise ValueError('Existing target page not found')
+            if pages[decision['target_page_id']].get('kind', 'kernel') != 'kernel':
+                raise ValueError('Canonical target must be a kernel page, not a PR page')
             if any(item['page_id'] == decision['target_page_id'] for item in implementations.values()):
                 raise ValueError('Already registered; use record_duplicate')
-            if not decision.get('equivalence_basis') or not decision.get('target_evidence'):
-                raise ValueError('Existing-page attribution requires explicit equivalence evidence')
-            for evidence in decision['target_evidence']:
-                path = contained(root, evidence['path'])
-                if not (evidence['path'].startswith('wiki/') or evidence['path'].startswith('artifacts/')):
-                    raise ValueError('Target evidence must be existing wiki content or code assets')
-                if evidence.get('sha256') != file_hash(path) or not evidence.get('locator'):
-                    raise ValueError('Invalid target evidence receipt')
+            validate_target_evidence(decision, root)
         elif action != 'create_page':
             if target not in implementations:
                 raise ValueError('Target implementation is not registered')
+            if action == 'extend_page' and implementations[target].get('managed') is False:
+                raise ValueError('Existing kernel page replacement requires a separate reviewed page edit')
             if implementations[target]['page_id'] != decision.get('target_page_id'):
                 raise ValueError('Target implementation/page mismatch')
             if decision.get('target_version_id') not in implementations[target]['versions']:
                 raise ValueError('Target version does not exist')
             if decision['target_page_id'] not in pages:
                 raise ValueError('Target page does not exist')
+            if pages[decision['target_page_id']].get('kind', 'kernel') != 'kernel':
+                raise ValueError('Canonical target must be a kernel page')
+            if not any(hint.get('page_id') == decision['target_page_id'] and
+                       any(resolution['match_id'] == hint['match_id'] and resolution['outcome'] == 'same_implementation'
+                           for resolution in decision.get('overlap_resolutions', [])) for hint in hints[identity]):
+                validate_target_evidence(decision, root)
             if relation == 'exact_duplicate':
-                old = implementations[target]['versions'][decision['target_version_id']]['candidate']
-                same_snapshot = old['candidate_id'] == identity
-                exact = (candidate['fingerprints'] == old['fingerprints'] and candidate['entry'] == old['entry']
+                old = implementations[target]['versions'][decision['target_version_id']].get('candidate', {})
+                same_snapshot = old.get('candidate_id') == identity
+                exact = (candidate['fingerprints'] == old.get('fingerprints') and candidate['entry'] == old.get('entry')
                          and not candidate['unresolved_dependencies'] and not old['unresolved_dependencies'])
-                same_origin_content = (candidate['origin']['repo_id'] == old['origin']['repo_id']
-                                       and candidate['content_digest'] == old['content_digest'])
+                same_origin_content = (candidate['origin']['repo_id'] == old.get('origin', {}).get('repo_id')
+                                       and candidate['content_digest'] == old.get('content_digest'))
                 if not (same_snapshot or exact or same_origin_content):
-                    raise ValueError('Duplicate requires complete matching receipts; use defer when uncertain')
+                    validate_target_evidence(decision, root)
+        if action in {'extend_page', 'retain_page', 'merge_candidate'} and not decision.get('selection_reason'):
+            raise ValueError('Representative selection requires a selection_reason')
         metadata = decision.get('metadata', {})
         for field in ('title', 'architectures', 'tags', 'kernel_types', 'languages', 'confidence', 'reproducibility'):
             if field not in metadata:
@@ -105,15 +241,33 @@ def validate_decisions(document, request, root, checkout):
         if metadata['confidence'] == 'verified' and not decision.get('evidence_basis'):
             raise ValueError('Verified must satisfy existing evidence_basis requirements')
         selected.append((candidate, decision))
-    return selected, sorted(set(candidates) - seen) + [d['candidate_id'] for d in document.get('decisions', []) if d['decision'] == 'defer']
+    targets = {}
+    for candidate, decision in selected:
+        if decision.get('target_page_id') and decision['action'] != 'merge_candidate':
+            targets.setdefault(decision['target_page_id'], []).append((candidate, decision))
+    for group in targets.values():
+        existing_targets = [d for _, d in group if d['action'] in {'attach_source', 'retain_page'} and not d.get('target_implementation_id')]
+        if len(existing_targets) > 1 or (len(group) > 1 and any(d['action'] == 'extend_page' for _, d in group)):
+            blocked.update(c['candidate_id'] for c, _ in group)
+    while True:
+        newly_blocked = {c['candidate_id'] for c, d in selected if d['action'] == 'merge_candidate' and
+                         d['target_candidate_id'] in blocked}
+        if newly_blocked <= blocked:
+            break
+        blocked.update(newly_blocked)
+    selected = [(c, d) for c, d in selected if c['candidate_id'] not in blocked]
+    pending = (set(candidates) - seen) | blocked | {d['candidate_id'] for d in document.get('decisions', []) if d['decision'] == 'defer'}
+    return selected, sorted(pending)
 
 
 def rebind_manifest(manifest, request):
     """Reuse content-bound records only against exactly the saved wiki context."""
     if manifest.get('context_digest') != request['context_digest']:
+        hints = overlap_index(request['candidates'], request['registry'], request['existing_pages'])
         # A completed import may only reuse versions already admitted with the
         # same receipt. No new candidate is accepted against changed context.
         reused = []
+        includes = {d['content_digest']: d for d in manifest.get('decisions', []) if d.get('decision') == 'include'}
         exclusions = {d['content_digest']: d for d in manifest.get('decisions', []) if d.get('decision') == 'exclude'}
         for candidate in request['candidates']:
             if candidate['content_digest'] in exclusions:
@@ -121,13 +275,26 @@ def rebind_manifest(manifest, request):
                 continue
             for identity, implementation in request['registry']['implementations'].items():
                 for version_id, version in implementation['versions'].items():
-                    old = version['candidate']
+                    old = version.get('candidate')
+                    if old is None:
+                        continue
                     if old['origin']['repo_id'] == candidate['origin']['repo_id'] and old['content_digest'] == candidate['content_digest']:
                         reused.append({**version['decision'], 'candidate_id': candidate['candidate_id'],
                                        'relation': 'exact_duplicate', 'action': 'record_duplicate',
                                        'target_implementation_id': identity, 'target_page_id': implementation['page_id'],
-                                       'target_version_id': version_id})
+                                       'target_version_id': version_id,
+                                       'overlap_resolutions': [
+                                           {'match_id': hint['match_id'], 'outcome': 'same_implementation',
+                                            'representative': implementation['page_id'], 'evidence': [hint['evidence']],
+                                            'rationale': 'Retain the previously admitted unchanged representative.'}
+                                           for hint in hints[candidate['candidate_id']]
+                                           if hint['kind'] == 'registry' and hint['implementation_id'] == identity]
+                                       + reuse_distinct_comparisons(version['decision'], hints[candidate['candidate_id']])})
                         break
+            if not any(row['candidate_id'] == candidate['candidate_id'] for row in reused):
+                retained = reuse_record(candidate, includes.get(candidate['content_digest'], {}), request, hints[candidate['candidate_id']])
+                if retained:
+                    reused.append(retained)
         return {'version': 1, 'context_digest': request['context_digest'], 'decisions': reused}
     old = {item['content_digest']: item for item in manifest.get('decisions', [])}
     rebound = []

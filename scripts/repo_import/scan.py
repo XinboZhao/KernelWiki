@@ -53,7 +53,9 @@ def dependency_paths(path, root, tracked):
 
 def scan_snapshot(snapshot, config):
     root = Path(snapshot['checkout'])
-    tracked = set(git(root, 'ls-files').splitlines())
+    tracked = set(git(root, 'ls-files', '-z').split('\0')) - {''}
+    skipped = {item['path'] for item in snapshot.get('skipped_submodules', [])}
+    tracked = {path for path in tracked if not any(path == child or path.startswith(child + '/') for child in skipped)}
     records, failures = [], []
     for relative in sorted(tracked):
         path = contained(root, relative)

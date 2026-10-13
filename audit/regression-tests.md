@@ -162,3 +162,33 @@ freshness and YAML fallback checks, full page validation, index regeneration,
 and the size gate (approximately 24.15 MiB / 25 MiB). No GPU execution or
 model invocation is performed by this test suite. Public presets require
 separate reviewed snapshots; none is enabled by default.
+
+## Repository-only import and overlap review update
+
+Current discovery includes 200 tests: 158 baseline tests plus 42 import/extraction
+tests. Added coverage checks skipped gitlinks, rejection of non-Git input, PR
+code comparison and context invalidation, same-batch representative selection,
+partial pending publication, compact retained versions and example-only scope.
+The feature ships review examples without imported corpus pages or a populated
+registry. Earlier receipts describe their dated implementation state.
+
+Current discovery now includes 201 tests after adding existing-page variant
+retention coverage. The earlier 200-test receipt remains historical.
+
+Final validation passed: 201 tests (158 baseline + 43 import/extraction),
+1,041 pages / 989 source IDs, 37 bundles, 14 ledgers, offline freshness, YAML
+fallback and size gate (approximately 24.22 MiB / 25 MiB). A real pinned public
+Quack review published one selected entry in an isolated temporary wiki, left
+one entry pending, returned one query result and passed repeat apply. No import
+outputs were added to the feature corpus; no Git commit or GPU execution occurred.
+
+Current discovery includes 202 tests (158 baseline + 44 import/extraction).
+The additional regression checks fresh-run reuse of unchanged distinct batch
+comparisons and invalidation when comparison evidence changes.
+
+Worktree import validation passed: 202 tests, full corpus validation and offline
+freshness. The pinned public review admitted one kernel and left one pending.
+A fresh prepare reused the unchanged review and retained one canonical page and
+one full representative version. Tracked import outputs were checked out and
+generated untracked outputs removed; staged implementation changes were preserved.
+No Git commit or GPU execution occurred. Run receipts remain in the ignored cache.

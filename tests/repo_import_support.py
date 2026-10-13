@@ -62,6 +62,14 @@ def document(request, decision=None):
             'decisions': [decision or admission(request)]}
 
 
+def resolve_review(request, decision, outcome='distinct', representative=None):
+    decision['overlap_resolutions'] = [
+        {'match_id': hint['match_id'], 'outcome': outcome, 'rationale': 'Fixture compares pinned source and matched evidence.',
+         'evidence': [hint['evidence']], 'representative': representative or decision['candidate_id']}
+        for hint in request['matches'][decision['candidate_id']]]
+    return decision
+
+
 def registered(request):
     candidate = request['candidates'][0]
     return {'version': 1, 'implementations': {'impl': {'page_id': 'kernel-test',

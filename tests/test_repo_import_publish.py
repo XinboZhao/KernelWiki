@@ -62,25 +62,25 @@ class PublishTests(unittest.TestCase):
             import_repo.apply(wiki, run)
             self.assertEqual('committed', read(run / 'transaction.yaml')['status'])
 
-    def test_manual_page_duplicate_adds_source_without_replacing_prose(self):
+    def test_existing_page_duplicate_adds_source_without_replacing_prose(self):
         with tempfile.TemporaryDirectory() as directory:
             wiki, repo, _, _ = prepared(Path(directory))
             from repo_import.publish import markdown
             from repo_import_support import admission, load_config
-            text = markdown({'id': 'kernel-manual', 'title': 'Manual', 'type': 'kernel',
-                             'sources': [], 'reproducibility': 'benchmarked'}, '# Hand-maintained content\n')
-            page = wiki / 'wiki/kernels/manual.md'
+            text = markdown({'id': 'kernel-existing', 'title': 'Existing kernel', 'type': 'kernel',
+                             'sources': [], 'reproducibility': 'benchmarked'}, '# Existing page content\n')
+            page = wiki / 'wiki/kernels/existing.md'
             page.write_text(text)
             run = import_repo.prepare(wiki, str(repo), 'HEAD', load_config(wiki))
             request = read(run / 'review-request.yaml')
             decision = admission(request)
-            decision.update(action='attach_source', relation='exact_duplicate', target_page_id='kernel-manual',
-                            equivalence_basis='Fixture source corresponds to this manually maintained example.',
-                            target_evidence=[{'path': 'wiki/kernels/manual.md', 'sha256': file_hash(page), 'locator': 'Hand-maintained content'}])
+            decision.update(action='attach_source', relation='exact_duplicate', target_page_id='kernel-existing',
+                            equivalence_basis='Fixture source corresponds to this existing kernel example.',
+                            target_evidence=[{'path': 'wiki/kernels/existing.md', 'sha256': file_hash(page), 'locator': 'Existing page content'}])
             write(run / 'decisions.yaml', document(request, decision))
             plan = import_repo.build(wiki, run)
-            staged = (run / 'staging/wiki/kernels/manual.md').read_text()
-            self.assertIn('# Hand-maintained content', staged)
+            staged = (run / 'staging/wiki/kernels/existing.md').read_text()
+            self.assertIn('# Existing page content', staged)
             self.assertIn('reproducibility: benchmarked', staged)
             self.assertNotIn('Fixture reduction', staged)
 

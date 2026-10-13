@@ -1,109 +1,140 @@
 # External review of repository kernels
 
-This guide is for an external agent or reviewer. The importer never invokes a
-model, executes this prompt, or requires a particular model or prompt version.
+This guide is for an external agent or human reviewer. The importer never
+executes this prompt, invokes a model, or requires a specific model or prompt
+version. It prepares materials and validates saved decisions.
 
-## Origin of the rules
+## Basis and scope
 
-KernelWiki's `CLAUDE.md` and `references/schema.md` define scope, confidence,
-reproducibility and performance contracts. The archived Phase 2 plan
-(`data/plan-supersession-baselines/plan-phase2.body.md`) supplies the historical
-include/exclude/defer pattern. Current `scripts/pr_policy.py` tests refine the
-positive device-evidence requirement. These are source rules, not a claim that
-a complete original review prompt was preserved. Representative selection and
-explicit content-bound entry allowlists have also been adapted from the existing
-extension importer; this guide introduces no private source content.
+The existing `CLAUDE.md` and `references/schema.md` define wiki scope, confidence,
+reproducibility and performance contracts. The archived Phase 2 plan supplies the
+include/exclude/defer pattern, and current `scripts/pr_policy.py` refines positive
+device evidence. Representative selection and content-bound entry allowlists
+are adapted to repository input. This is an adapted guide, not a claim that all
+historical prompt wording was preserved.
 
-## Suggested review prompt
+Review only the pinned input repository's tracked files. Submodules are listed
+as skipped and are not part of its kernel inventory. A Git repo is required for
+provenance. Review originals and callers; a file extension, function name or
+`@triton.jit` decorator alone does not establish an actual launchable kernel.
 
-Review the candidates in `review-request.yaml` against the pinned checkout,
-`matches.yaml`, existing kernel pages and their source evidence. The input is a
-repository snapshot, not a PR. Do not assume that every function in a kernel
-file or every `@triton.jit` function is a launchable kernel.
+## Suggested prompt
 
-1. Identify actual device implementations and their entry points. Exclude host
-   wrappers, support helpers, tests and unrelated generated material. A file
-   extension, tuning variable, kernel-like name or host launch syntax alone is
-   insufficient. Inspect callers where needed.
-2. Preserve worthwhile operation families and implementations, including
-   architecture/language differences. Collapse redundant dtype/tile/launch
-   variants only when their behavior and teaching value are genuinely shared.
-   Do not merge implementations solely by operation name.
-3. Compare signatures, full defining files, helpers, macros, templates and
-   configuration. Unresolved dependencies are uncertainty, not proof of
-   equivalence. Use `exact_duplicate`, `new_version`, `variant`, or `distinct`.
-   Renamed/moved implementations and diverged forks require evidence. Do not
-   invent a linear version order across independent repositories.
-4. Select existing `confidence` values according to KernelWiki's definitions;
-   repository existence and review approval do not establish `verified`.
-   Select only `snippet`, `runnable` or `benchmarked` for publication. runnable
-   requires a complete build/run example; benchmarked also requires input,
-   environment, method and result evidence. Distinguish upstream reports from
-   locally executed evidence. Never transfer old measurements to changed code
-   without evidence that they apply.
-5. Keep Blackwell-first scope, explicit Hopper relevance where required,
-   controlled architecture/language vocabulary and English canonical pages.
-   Unknown architecture remains unknown. Do not fabricate performance numbers,
-   dependencies, provenance or correctness results.
-6. For uncertainty, use `defer` with an actionable rationale. Otherwise explain
-   include/exclude using exact source locators. Fill `decisions.yaml`; retain
-   its candidate IDs, content digests and wiki context digest. Preserve raw
-   agent input/output in `review-attachments/` when available.
+Read `review-request.yaml`, `matches.yaml`, the pinned source checkout and the
+existing kernel/PR pages and code evidence included in the context.
 
-## Output contract
+1. Identify actual device implementations. Inspect host launchers, template
+   dispatch, macros and helpers. Exclude host-only wrappers, support helpers,
+   unrelated tests and generated material. Report unresolved dependencies rather
+   than treating them as proof of equivalence.
+2. Preserve worthwhile operation families and genuinely different implementations.
+   Follow Blackwell-first scope, existing Hopper relevance requirements,
+   controlled vocabulary and English canonical page conventions. Do not guess
+   an architecture when source evidence is missing.
+3. Resolve every discovered overlap before inclusion. Compare registry entries,
+   existing kernel pages, PR code assets and same-batch candidates. Cite the
+   matched evidence and the input source. Decide `distinct` or
+   `same_implementation`; explain mathematical behavior, signatures, helper and
+   dependency differences. Renaming and repo names alone do not decide identity.
+4. For the same implementation, choose one representative using applicable
+   evidence, reproducibility, intended scope and teaching value. Do not simply
+   prefer the newest commit. Different sources, newer versions and tuning
+   variants share a single canonical kernel page. Keep the existing page when
+   it is the better representative. Explain the selection reason.
+5. If a PR already links to a canonical kernel page, reuse it. If only PR source
+   records exist, a new canonical kernel page may cite that PR and the repo.
+   Do not create another PR page or copy its prose as a second implementation.
+6. Choose existing confidence values with a `confidence_basis`. Review approval
+   and repo existence do not imply verified confidence. Choose only snippet,
+   runnable or benchmarked reproducibility. Higher levels require applicable
+   content-bound evidence. Identify upstream-reported versus locally-executed
+   evidence. Never transfer discarded-version metrics to the selected version.
+7. Use `defer` for unresolved relationships or insufficient evidence. Explain
+   the next comparison or evidence needed. Only those candidates stay pending;
+   unrelated resolved candidates may publish. A simple include cannot bypass
+   overlap resolution. Do not fabricate provenance, correctness or performance.
+8. Save structured decisions, with current content/context hashes and IDs.
+   Preserve original agent input/output under `review-attachments/` when
+   available. No prompt-version change alone invalidates saved admission.
+
+## Decision output
+
+The document has `version: 1`, the prepared `context_digest`, optional
+`review_provenance`, and `decisions`. Every row requires candidate/content IDs,
+include/exclude/defer, a substantive rationale and source evidence. Evidence
+receipts have path, SHA-256 and locator. Use current prepared values.
+
+For each hint on an included candidate, add a resolution:
 
 ```yaml
-version: 1
-context_digest: <copied from review-request.yaml>
-review_provenance:
-  reviewer: <agent or person>
-  guide: repo-import-review-v1  # informational; not an invalidation switch
-decisions: []                 # see complete example below
-```
-
-A complete snippet-level decision:
-
-```yaml
-version: 1
-context_digest: <copied value>
-decisions:
-  - candidate_id: <copied value>
-    content_digest: <copied value>
-    decision: include
-    rationale: <specific reason and uncertainty limits>
+overlap_resolutions:
+  - match_id: <copied match-id>
+    outcome: distinct
+    rationale: <specific comparison explaining a different implementation>
     evidence:
-      - path: kernels/example.py
-        sha256: <file receipt from inventory>
-        locator: <function name or exact section>
-    relation: distinct
-    action: create_page
-    confidence_basis: <explain the existing confidence choice>
-    metadata:
-      title: Example kernel
-      architectures: []
-      tags: [reduction]
-      kernel_types: [reduction]
-      languages: [triton]
-      confidence: experimental
-      reproducibility: snippet
+      - path: <matched page or code path>
+        sha256: <copied receipt>
+        locator: <compared entry, source section or exact lines>
 ```
 
-For `new_version` or `variant`, use `extend_page`, and specify
-`target_implementation_id`, `target_page_id`, and `target_version_id` from the
-registry. For `exact_duplicate`, use `record_duplicate` with the same target
-fields. For a duplicate of an existing unregistered/manual page, use `attach_source`
-and `target_page_id`, plus `equivalence_basis` and `target_evidence` receipts
-(path, sha256, locator of the existing wiki page or code asset). The external
-reviewer must justify equivalence; a title match is insufficient. This adds
-attribution and an implementation identity while preserving the existing prose
-and reproducibility. Future body changes to manual pages remain deferred for
-manual editing; the importer never replaces their prose.
+For `same_implementation`, also set `representative` to the selected candidate
+ID or existing canonical page ID. A batch representative must be included and
+must not itself merge into another candidate. Reciprocal decisions must agree;
+multiple candidates cannot each create a page while declaring the same identity.
+Do not edit or remove prepared hints. Build/apply checks current source and wiki
+context, including PR code hashes.
 
-For runnable, add `reproducibility_evidence` entries `build`, `run`, and
-`environment`. For benchmarked also add `benchmark`, `inputs`, `method`, and
-`results`, plus `performance_claims` in the existing schema. Each receipt has
-`path`, `sha256`, `locator`, and `basis` (`upstream-reported` or
-`locally-executed`). Receipts reference committed files in the pinned input
-repository; local execution reports must be committed to a reviewed snapshot
-before they can support a higher reproducibility level. The importer does not
-execute downloaded programs.
+## Publication actions
+
+Existing kernel page refers here to a page already in the wiki whose body is
+maintained outside this importer. It makes no assumption about the author or
+the tool originally used to create it.
+
+| Relationship | Action | Representative choice |
+| --- | --- | --- |
+| distinct | create_page | Incoming implementation gets its own page after all comparisons resolve. |
+| exact_duplicate | record_duplicate | Existing registered page remains; add source attribution. |
+| exact_duplicate of an existing kernel page | attach_source | Existing page remains; add attribution and registry identity. |
+| new_version or variant | extend_page | Incoming version replaces the representative on the same managed page. |
+| new_version or variant | retain_page | Existing representative remains; retain a compact incoming relation. |
+| exact_duplicate, new_version or variant within a batch | merge_candidate | Another included candidate represents the implementation. |
+
+Registered targets require `target_implementation_id`, `target_page_id` and
+`target_version_id`. Batch merge requires `target_candidate_id`. Selection
+through extend/retain/merge requires `selection_reason`.
+
+For an unregistered existing kernel page, attach_source requires `target_page_id`,
+`equivalence_basis` and `target_evidence` receipts in wiki or code assets. Existing
+prose and reproducibility are preserved. Automatic body replacement of an existing kernel
+page is not supported; such edits require a separate reviewed page edit.
+
+An existing kernel page can also remain the representative of an incoming new_version or
+variant: use retain_page with target_page_id, equivalence_basis, target_evidence,
+and selection_reason, without a target implementation/version until registered.
+The registry stores the selected existing kernel page's receipt and actual classification;
+incoming content is only a compact relationship record. A reviewed equivalent
+copy whose fingerprints differ may use record_duplicate with explicit input and
+target comparison evidence, not name-based equivalence.
+
+The selected representative is the only full version stored in the runtime
+registry. Nonselected versions preserve compact origin, content digest,
+relationship and reason, with full review history in run storage. The registry
+is an importer bookkeeping file, not an additional user-facing kernel page.
+
+## Confidence and execution evidence
+
+Use the existing wiki definitions for source-reported, inferred, experimental
+and verified. Verified must also satisfy the existing validator's source and
+`evidence_basis` contracts. Do not equate this with a local GPU correctness run.
+
+Runnable requires `reproducibility_evidence` build, run and environment receipts.
+Benchmarked additionally requires benchmark, inputs, method and results receipts,
+plus valid `performance_claims`. Each receipt names a committed snapshot file,
+SHA-256, locator and basis (`upstream-reported` or `locally-executed`). Local
+reports must already belong to the reviewed snapshot; the importer does not
+create commits or execute programs to obtain them.
+
+See [public example reviews](../examples/repo-import/README.md) for an included
+Quack entry with an explicit forward/backward distinction and a deferred
+FlashMLA candidate with unresolved existing-page overlap. These examples are
+review materials only, not preinstalled wiki kernels or default presets.

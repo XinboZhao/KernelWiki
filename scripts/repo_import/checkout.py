@@ -35,7 +35,7 @@ def resolve_snapshot(repo, revision, checkout_dir):
         source = checkout_dir / ('mirror-' + digest(canonical_repo(repo))[:16])
         if not source.exists():
             source.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(['git', 'clone', '--mirror', '--', repo, str(source)], check=True)
+            subprocess.run(['git', 'clone', '--mirror', '--no-recurse-submodules', '--', repo, str(source)], check=True)
         else:
             subprocess.run(['git', '-C', str(source), 'fetch', '--prune', 'origin'], check=True)
     commit = git(source, 'rev-parse', '--verify', (revision or 'HEAD') + '^{commit}')
@@ -44,7 +44,21 @@ def resolve_snapshot(repo, revision, checkout_dir):
     destination = checkout_dir / repo_id / commit
     if not destination.exists():
         destination.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(['git', 'clone', '--no-hardlinks', '--no-checkout', '--', str(source), str(destination)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(['git', '-C', str(destination), 'checkout', '--detach', commit], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(['git', 'clone', '--no-hardlinks', '--no-checkout', '--no-recurse-submodules', '--', str(source), str(destination)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            git(destination, 'cat-file', '-e', commit + '^{tree}')
+        except subprocess.CalledProcessError:
+            subprocess.run(['git', '-C', str(destination), 'fetch', '--no-tags', str(source), commit], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(['git', '-C', str(destination), 'checkout', '--no-recurse-submodules', '--detach', commit], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if git(destination, 'rev-parse', 'HEAD') != commit or git(destination, 'status', '--porcelain'):
+        raise ValueError('Cached pinned checkout was modified; use a fresh checkout directory')
+    gitlinks = []
+    for record in git(destination, 'ls-tree', '-rz', commit).split('\0'):
+        if record:
+            header, path = record.split('\t', 1)
+            mode, _, child_commit = header.split()
+            if mode == '160000':
+                gitlinks.append({'path': path, 'commit': child_commit, 'reason': 'Submodules are not scanned'})
     return {'repo_id': repo_id, 'repo': identity, 'commit': commit,
-            'checkout': str(destination), 'ignored_worktree_changes': dirty}
+            'checkout': str(destination), 'ignored_worktree_changes': dirty, 'skipped_submodules': gitlinks}

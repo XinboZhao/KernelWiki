@@ -10,8 +10,8 @@ from pathlib import Path
 
 from repo_import.checkout import git, resolve_snapshot
 from repo_import.config import load_config, load_preset, merge
-from repo_import.decisions import rebind_manifest, validate_decisions
-from repo_import.match import context_digest, existing_index, find_matches, registry
+from repo_import.decisions import rebind_manifest, reuse_distinct_comparisons, reuse_record, validate_decisions
+from repo_import.match import context_digest, existing_index, overlap_index, registry
 from repo_import.publish import apply_plan, build_plan, validate_plan, recover_transaction
 from repo_import.scan import scan_snapshot
 from repo_import.store import contained, digest, file_hash, read, write, atomic_write
@@ -37,7 +37,7 @@ def prepare(root, repo, revision, config):
                    'snapshot': snapshot, 'scan_config': config['scan'], **inventory,
                    'registry': registered, 'existing_pages': pages,
                    'context_digest': context_digest(pages, registered)}
-        matches = {c['candidate_id']: find_matches(c, registered) for c in inventory['candidates']}
+        matches = overlap_index(inventory['candidates'], registered, pages)
         request['matches'] = matches
         write(run / 'request.yaml', {'repo': repo, 'revision': revision, 'config': config})
         write(run / 'snapshot.yaml', snapshot)
@@ -49,31 +49,49 @@ def prepare(root, repo, revision, config):
             atomic_write(run / 'review-guide.md', guide.read_text())
         decisions = []
         prior_exclusions = {}
+        prior_includes = {}
         prior_dir = root / 'data/repo-import/decisions' / snapshot['repo_id']
         if prior_dir.exists():
             for path in sorted(prior_dir.glob('*.yaml')):
                 for decision in read(path).get('decisions', []):
                     if decision.get('decision') == 'exclude':
                         prior_exclusions[decision['content_digest']] = decision
+                    elif decision.get('decision') == 'include':
+                        prior_includes[decision['content_digest']] = decision
         for candidate in inventory['candidates']:
             # A previously admitted unchanged same-repository version can be reused.
             reused = None
             for identity, implementation in registered['implementations'].items():
                 for version_id, version in implementation['versions'].items():
-                    old = version['candidate']
+                    old = version.get('candidate')
+                    if old is None:
+                        continue
                     if (old['origin']['repo_id'] == candidate['origin']['repo_id'] and
                             old['content_digest'] == candidate['content_digest']):
                         reused = {**version['decision'], 'candidate_id': candidate['candidate_id'],
                                   'relation': 'exact_duplicate', 'action': 'record_duplicate',
                                   'target_implementation_id': identity, 'target_page_id': implementation['page_id'],
                                   'target_version_id': version_id}
+                        reused['overlap_resolutions'] = [
+                            {'match_id': hint['match_id'], 'outcome': 'same_implementation',
+                             'representative': implementation['page_id'],
+                             'rationale': 'Unchanged previously admitted content; retain its canonical page.',
+                             'evidence': [hint['evidence']]}
+                            for hint in matches[candidate['candidate_id']]
+                            if hint['kind'] == 'registry' and hint['implementation_id'] == identity]
+                        reused['overlap_resolutions'] += reuse_distinct_comparisons(version['decision'], matches[candidate['candidate_id']])
                         break
             if not reused and candidate['content_digest'] in prior_exclusions:
                 reused = {**prior_exclusions[candidate['content_digest']], 'candidate_id': candidate['candidate_id']}
+            if not reused:
+                reused = reuse_record(candidate, prior_includes.get(candidate['content_digest'], {}),
+                                      request, matches[candidate['candidate_id']])
             if reused:
                 try:
-                    validate_decisions({'version': 1, 'context_digest': request['context_digest'],
+                    _, pending = validate_decisions({'version': 1, 'context_digest': request['context_digest'],
                                         'decisions': [reused]}, request, root, Path(snapshot['checkout']))
+                    if candidate['candidate_id'] in pending:
+                        reused = None
                 except ValueError:
                     reused = None
             if reused:
@@ -106,11 +124,18 @@ def check_snapshot(request):
         raise ValueError('Snapshot receipts changed')
 
 
+def check_context(root, request):
+    pages, registered = existing_index(root), registry(root)
+    if (request['context_digest'] != context_digest(pages, registered) or
+            request['existing_pages'] != pages or request['registry'] != registered or
+            request['matches'] != overlap_index(request['candidates'], registered, pages)):
+        raise ValueError('Wiki or matching materials changed; prepare again')
+
+
 def build(root, run):
     request = read(run / 'review-request.yaml')
     check_snapshot(request)
-    if request['context_digest'] != context_digest(existing_index(root), registry(root)):
-        raise ValueError('Wiki changed since preparation; prepare again to review current matches')
+    check_context(root, request)
     document = read(run / 'decisions.yaml')
     selected, pending = validate_decisions(document, request, root, Path(request['snapshot']['checkout']))
     plan = build_plan(root, run, request, document, selected)
@@ -139,8 +164,7 @@ def apply(root, run):
         raise ValueError('Build this run before applying it')
     if plan.get('request_digest') != digest(request) or plan.get('decisions_digest') != digest(read(run / 'decisions.yaml')):
         raise ValueError('Review materials changed after build; rebuild required')
-    if request['context_digest'] != context_digest(existing_index(root), registry(root)):
-        raise ValueError('Wiki changed after build; prepare again')
+    check_context(root, request)
     if not plan.get('validated_digest'):
         validate_plan(root, run, plan)
     apply_plan(root, run, plan)
