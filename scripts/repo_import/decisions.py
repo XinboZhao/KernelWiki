@@ -50,6 +50,33 @@ def validate_target_evidence(decision, root):
         path = contained(root, evidence['path'])
         if evidence.get('sha256') != file_hash(path) or not evidence.get('locator'):
             raise ValueError('Invalid target evidence receipt')
+        if 'anchor' in evidence and (not isinstance(evidence['anchor'], str) or
+                                     not evidence['anchor'].strip() or evidence['anchor'] not in path.read_text()):
+            raise ValueError('Target evidence anchor must occur literally in the receipted content')
+
+
+def shared_existing_page(group, hints, pages):
+    """Explicitly covered branches may retain one existing page, without merging graphs."""
+    scopes = []
+    for _, decision in group:
+        if decision.get('action') != 'retain_page' or decision.get('target_implementation_id'):
+            return False
+        path = pages[decision['target_page_id']]['path']
+        anchors = {e['anchor'] for e in decision.get('target_evidence', [])
+                   if e['path'] == path and e.get('anchor')}
+        if not anchors or any(anchors & previous for previous in scopes):
+            return False
+        scopes.append(anchors)
+        for other, _ in group:
+            if other['candidate_id'] == decision['candidate_id']:
+                continue
+            matches = {h['match_id'] for h in hints[decision['candidate_id']]
+                       if h['kind'] == 'batch' and h['candidate_id'] == other['candidate_id']}
+            resolved = {r['match_id'] for r in decision.get('overlap_resolutions', [])
+                        if r.get('outcome') == 'distinct'}
+            if not matches or not matches <= resolved:
+                return False
+    return True
 
 
 def reuse_record(candidate, previous, request, hints):
@@ -73,7 +100,10 @@ def reuse_record(candidate, previous, request, hints):
                 'target_implementation_id': identity, 'target_page_id': item['page_id'],
                 'target_version_id': item['current_version'],
                 'equivalence_basis': previous.get('equivalence_basis', 'Unchanged previously reviewed relationship and representative.'),
-                'target_evidence': [{'path': page['path'], 'sha256': page['sha256'], 'locator': item['page_id']}],
+                'target_evidence': [
+                    {**receipt, 'sha256': page['sha256']} if receipt['path'] == page['path'] else receipt
+                    for receipt in previous.get('target_evidence', [])
+                ] or [{'path': page['path'], 'sha256': page['sha256'], 'locator': item['page_id']}],
                 'overlap_resolutions': [
                     {'match_id': hint['match_id'], 'outcome': 'same_implementation',
                      'representative': item['page_id'], 'evidence': [hint['evidence']],
@@ -250,6 +280,8 @@ def validate_decisions(document, request, root, checkout, *, _matches=None):
                     validate_target_evidence(decision, root)
         if action in {'extend_page', 'retain_page', 'merge_candidate'} and not decision.get('selection_reason'):
             raise ValueError('Representative selection requires a selection_reason')
+        if any('anchor' in evidence for evidence in decision.get('target_evidence', [])):
+            validate_target_evidence(decision, root)
         metadata = decision.get('metadata', {})
         for field in ('title', 'architectures', 'tags', 'kernel_types', 'languages', 'confidence', 'reproducibility'):
             if field not in metadata:
@@ -279,12 +311,17 @@ def validate_decisions(document, request, root, checkout, *, _matches=None):
             raise ValueError('Verified must satisfy existing evidence_basis requirements')
         selected.append((candidate, decision))
     targets = {}
-    for candidate, decision in selected:
-        if decision.get('target_page_id') and decision['action'] != 'merge_candidate':
+    for identity, decision in decisions.items():
+        if decision.get('decision') != 'include':
+            continue
+        candidate = candidates[identity]
+        if decision.get('target_page_id') and decision.get('action') != 'merge_candidate':
             targets.setdefault(decision['target_page_id'], []).append((candidate, decision))
     for group in targets.values():
-        existing_targets = [d for _, d in group if d['action'] in {'attach_source', 'retain_page'} and not d.get('target_implementation_id')]
-        if len(existing_targets) > 1 or (len(group) > 1 and any(d['action'] == 'extend_page' for _, d in group)):
+        existing_targets = [d for _, d in group if d.get('action') in {'attach_source', 'retain_page'} and not d.get('target_implementation_id')]
+        if ((len(existing_targets) > 1 and (any(c['candidate_id'] in blocked for c, _ in group) or
+                                           not shared_existing_page(group, hints, pages))) or
+                (len(group) > 1 and any(d.get('action') == 'extend_page' for _, d in group))):
             blocked.update(c['candidate_id'] for c, _ in group)
     while True:
         newly_blocked = {c['candidate_id'] for c, d in selected if d['action'] == 'merge_candidate' and

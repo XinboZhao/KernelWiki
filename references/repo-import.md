@@ -199,6 +199,13 @@ evidence, reproducibility, scope and teaching value, not commit recency alone.
 Existing kernel page prose is never automatically replaced; body changes to such pages
 require a separate reviewed page edit rather than `extend_page`.
 
+Several different source branches already covered by one existing page may all
+retain it. Review must identify distinct literal anchors in content-bound target
+page receipts and resolve every pair's mandatory batch comparison as distinct.
+Otherwise the group remains pending. This preserves one page/registry record and
+separate source relationships; it does not merge different execution graphs or
+allow ordinary versions to bypass representative selection.
+
 The runtime registry stores one full representative version per implementation.
 Other versions/variants retain compact origin, digest, relationship and reason
 records; full scan and review history remains in persistent run storage. The

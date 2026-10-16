@@ -344,6 +344,15 @@ page is not supported; such edits require a separate reviewed page edit.
 An existing kernel page can also remain the representative of an incoming new_version or
 variant: use retain_page with target_page_id, equivalence_basis, target_evidence,
 and selection_reason, without a target implementation/version until registered.
+If the same existing page explicitly covers several different implementation
+branches, each incoming branch may use `retain_page` for that page. Each decision
+must cite a different literal `anchor` in its `target_evidence` receipt for the
+target page, explain the correspondence in `equivalence_basis`, and resolve a
+mandatory reciprocal batch comparison as `distinct` against every other branch.
+Missing scopes or comparisons keep the group pending. This does not turn duplicate
+implementations into separate branches: equivalent versions still select one
+representative. Publication preserves one existing page and one registry record,
+with separate compact source relationships and their scoped receipts.
 The registry stores the selected existing kernel page's receipt and actual classification;
 incoming content is only a compact relationship record. A reviewed equivalent
 copy whose fingerprints differ may use record_duplicate with explicit input and

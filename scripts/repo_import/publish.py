@@ -107,20 +107,22 @@ def build_plan(root, run, request, document, selected):
                                           for r in decision.get('overlap_resolutions', [])):
                 review_sources.add(hint['page_id'])
         identity = decision.get('target_implementation_id') or ('implementation-' + digest(candidate['candidate_id'])[:20])
+        existing_page_target = decision['action'] in {'attach_source', 'retain_page'} and not decision.get('target_implementation_id')
+        if existing_page_target:
+            identity = 'implementation-' + digest({'existing_page': decision['target_page_id']})[:20]
         if decision['action'] == 'merge_candidate':
             identity = canonical[decision['target_candidate_id']]
         canonical[candidate['candidate_id']] = identity
         implementation = registered['implementations'].setdefault(identity, {
             'page_id': 'kernel-imported-' + identity.removeprefix('implementation-'),
             'versions': {}, 'origins': []})
-        existing_page_target = decision['action'] in {'attach_source', 'retain_page'} and not decision.get('target_implementation_id')
-        if existing_page_target:
+        if existing_page_target and not implementation.get('current_version'):
             target = next(p for p in request['existing_pages'] if p['page_id'] == decision['target_page_id'])
             implementation['page_id'] = target['page_id']
             implementation['page_path'] = target['path']
         page_id = implementation['page_id']
         page_path = implementation.setdefault('page_path', f'wiki/kernels/imported/{page_id}.md')
-        if existing_page_target:
+        if existing_page_target and not implementation.get('current_version'):
             existing_text = contained(root, page_path).read_text()
             existing_match = re.match(r'^---\s*\n(.*?)\n---\s*\n(.*)', existing_text, re.DOTALL)
             existing_metadata = yaml.safe_load(existing_match.group(1))
@@ -140,7 +142,10 @@ def build_plan(root, run, request, document, selected):
                     'content_digest': candidate['content_digest'], 'relation': decision['relation'],
                     'representative': implementation['current_version'],
                     'reason': decision.get('selection_reason', decision['rationale']),
-                    'evidence': decision.get('evidence', [])})
+                    'evidence': decision.get('evidence', []),
+                    **({'target_evidence': decision['target_evidence'],
+                        'equivalence_basis': decision['equivalence_basis']}
+                       if any('anchor' in e for e in decision.get('target_evidence', [])) else {})})
         else:
             version = {'candidate': candidate, 'metadata': decision['metadata'], 'decision': decision,
                        'source_id': source_id}
