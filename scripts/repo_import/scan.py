@@ -8,7 +8,9 @@ from .checkout import git
 from .store import digest, file_hash, contained
 
 EXTENSIONS = CUDA_EXTENSIONS | {'.py'}
-EXTRACTOR_VERSION = 'repo-entries-v1'
+EXTRACTOR_VERSION = 'repo-entries-v1'  # Stable encoding of individual entry receipts.
+SCAN_CONTRACT = 'repo-scan-v3'  # Includes standard qualifiers and local prefix macros.
+ENTRY_KINDS = {'cuda_global', 'cute_kernel', 'triton_jit'}
 
 
 def dependency_paths(path, root, tracked):
@@ -52,11 +54,21 @@ def dependency_paths(path, root, tracked):
 
 
 def scan_snapshot(snapshot, config):
+    enabled = config.get('entry_kinds', sorted(ENTRY_KINDS))
+    if not isinstance(enabled, list) or any(kind not in ENTRY_KINDS for kind in enabled):
+        raise ValueError('scan.entry_kinds must be a list of supported entry kinds')
     root = Path(snapshot['checkout'])
     tracked = set(git(root, 'ls-files', '-z').split('\0')) - {''}
     skipped = {item['path'] for item in snapshot.get('skipped_submodules', [])}
     tracked = {path for path in tracked if not any(path == child or path.startswith(child + '/') for child in skipped)}
     records, failures = [], []
+    # The checkout is pinned for the whole scan. Shared dependency modules and
+    # their hashes can be reused within this scan, never across source snapshots.
+    dependency_cache, hash_cache = {}, {}
+    def source_hash(path):
+        if path not in hash_cache:
+            hash_cache[path] = file_hash(path)
+        return hash_cache[path]
     for relative in sorted(tracked):
         path = contained(root, relative)
         if path.is_symlink() or not path.is_file() or path.suffix not in EXTENSIONS:
@@ -72,7 +84,7 @@ def scan_snapshot(snapshot, config):
             except SyntaxError as error:
                 failures.append({'path': relative, 'error': str(error)})
                 continue
-        entries = kernel_entries(path, text)
+        entries = [entry for entry in kernel_entries(path, text) if entry.kind in enabled]
         if not entries:
             continue
         visited, queue, unresolved = set(), [path], set()
@@ -81,13 +93,15 @@ def scan_snapshot(snapshot, config):
             if current in visited:
                 continue
             visited.add(current)
-            dependencies, unknown = dependency_paths(current, root, tracked)
+            if current not in dependency_cache:
+                dependency_cache[current] = dependency_paths(current, root, tracked)
+            dependencies, unknown = dependency_cache[current]
             unresolved.update(unknown)
             queue.extend(dependencies - visited)
-        receipts = [{'path': p.relative_to(root).as_posix(), 'sha256': file_hash(p)} for p in sorted(visited)]
+        receipts = [{'path': p.relative_to(root).as_posix(), 'sha256': source_hash(p)} for p in sorted(visited)]
         # Full defining file is bound too: helpers, templates, signatures and macros
         # in the same translation unit cannot silently reuse a body-only decision.
-        fingerprint = {'source_sha256': file_hash(path), 'dependencies_sha256': digest(receipts),
+        fingerprint = {'source_sha256': source_hash(path), 'dependencies_sha256': digest(receipts),
                        'extraction_version': EXTRACTOR_VERSION}
         for entry in entries:
             candidate = {'origin': {k: snapshot[k] for k in ('repo_id', 'repo', 'commit')},

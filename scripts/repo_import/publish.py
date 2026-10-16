@@ -38,6 +38,46 @@ def checked_text(value):
     return str(value).replace('`', '').replace('\n', ' ')
 
 
+def member_section(implementation):
+    """Render compact provenance without claiming unioned entry capabilities."""
+    records = implementation.get('records', [])
+    if not records:
+        return ''
+    def cell(value):
+        return checked_text(value).replace('|', '&#124;')
+    rows = ['<!-- repo-import-members:start -->', '## Related source entries', '',
+            'Each entry retains its own parameter and dtype limits. These sources do not imply that the representative entry supports every variant.', '',
+            '| Repository / commit | Path | Entry | Relationship | Difference / selection reason |',
+            '|---|---|---|---|---|']
+    for record in records:
+        origin = record['origin']
+        rows.append('| ' + ' | '.join(cell(value) for value in (
+            str(origin.get('repo', origin.get('repo_id', ''))) + ' / ' + origin.get('commit', ''),
+            record['path'], record['entry'], record['relation'], record['reason'])) + ' |')
+    return '\n'.join(rows + ['<!-- repo-import-members:end -->'])
+
+
+def compact_manifest(run, request, document, selected):
+    """Formal publication evidence is not a replacement for the full audit pack."""
+    admitted = {c['candidate_id'] for c, _ in selected}
+    explicit = [d for d in document.get('decisions', [])
+                if d.get('decision') == 'exclude' or d.get('candidate_id') in admitted]
+    formal = {key: document[key] for key in ('version', 'context_digest', 'selection_digest') if key in document}
+    formal['decisions'] = explicit
+    formal['run_reference'] = {
+        'run_id': request['run_id'], 'path': str(run.resolve()),
+        'repo': request['snapshot']['repo'], 'commit': request['snapshot']['commit'],
+        'request_digest': digest(request), 'decisions_digest': digest(document),
+        'inventory_digest': request.get('inventory_digest', digest(read(run / 'inventory.yaml'))),
+        'selection_digest': digest(request['selection']) if 'selection' in request else None}
+    formal['members'] = [{key: row[key] for key in (
+        'candidate_id', 'content_digest', 'path', 'entry', 'representative', 'relation',
+        'difference_summary', 'rationale', 'evidence') if key in row}
+        for row in request.get('selection', {}).get('entries', [])
+        if row['role'] == 'member' and row['candidate_id'] in admitted]
+    return formal
+
+
 def build_plan(root, run, request, document, selected):
     registered = copy.deepcopy(request['registry'])
     snapshot = request['snapshot']
@@ -95,12 +135,12 @@ def build_plan(root, run, request, document, selected):
         target_version = decision.get('target_version_id')
         if existing_page_target or decision['action'] in {'record_duplicate', 'retain_page', 'merge_candidate'}:
             version_id = target_version
-            if decision['action'] != 'record_duplicate':
-                add_record(implementation, {
+            add_record(implementation, {
                     'origin': candidate['origin'], 'path': candidate['path'], 'entry': candidate['entry'],
                     'content_digest': candidate['content_digest'], 'relation': decision['relation'],
                     'representative': implementation['current_version'],
-                    'reason': decision.get('selection_reason', decision['rationale'])})
+                    'reason': decision.get('selection_reason', decision['rationale']),
+                    'evidence': decision.get('evidence', [])})
         else:
             version = {'candidate': candidate, 'metadata': decision['metadata'], 'decision': decision,
                        'source_id': source_id}
@@ -166,9 +206,20 @@ def build_plan(root, run, request, document, selected):
             if implementation.get('managed') is False or f'import_record: {identity}' not in old_text:
                 raise ValueError('Cannot replace an existing kernel page; supply a separate reviewed page edit')
         outputs[page_path] = markdown(metadata, body)
+    # Append only importer-owned provenance, preserving all existing page prose.
+    for implementation in registered['implementations'].values():
+        page_path = implementation['page_path']
+        if page_path not in outputs:
+            continue
+        text = re.sub(r'\n*<!-- repo-import-members:start -->.*?<!-- repo-import-members:end -->\n*',
+                      '\n', outputs[page_path], flags=re.DOTALL).rstrip()
+        section = member_section(implementation)
+        outputs[page_path] = text + ('\n\n' + section if section else '') + '\n'
+        representative = implementation['versions'][implementation['current_version']]
+        if 'page_evidence' in representative:
+            representative['page_evidence']['sha256'] = hashlib.sha256(outputs[page_path].encode()).hexdigest()
     manifest_path = f"data/repo-import/decisions/{snapshot['repo_id']}/{request['run_id']}.yaml"
-    formal = {**document, 'decisions': [d for d in document.get('decisions', [])
-              if d['decision'] != 'defer' or d.get('rationale') != 'Pending external review']}
+    formal = compact_manifest(run, request, document, selected)
     outputs[manifest_path] = yaml.safe_dump(formal, sort_keys=False)
     outputs['data/repo-import/registry.yaml'] = yaml.safe_dump(registered, sort_keys=False)
     files = []

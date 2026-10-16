@@ -16,6 +16,13 @@ def load_config(root, config_path=None):
         config = merge(config, read(Path(config_path).resolve()))
     if config.get('version') != 1:
         raise ValueError('Unsupported configuration version')
+    from .selection import KINDS
+    kinds = config.get('scan', {}).get('entry_kinds', sorted(KINDS))
+    if not isinstance(kinds, list) or any(kind not in KINDS for kind in kinds):
+        raise ValueError('Unsupported scan.entry_kinds')
+    enabled = config.get('selection', {}).get('enabled', True)
+    if not isinstance(enabled, bool):
+        raise ValueError('selection.enabled must be a boolean')
     return config
 
 

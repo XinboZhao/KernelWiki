@@ -14,7 +14,7 @@ repository commit and records candidate fingerprints, evidence and a decision.
 
 Example IDs, comparison hints and wiki-context digests belong to their recorded
 snapshots. Run `prepare` for your chosen repository and scope, inspect current
-matches, then adapt the decisions using current candidate/match IDs and evidence.
+selection first, run `select`, inspect representative matches, then adapt the decisions using current candidate/match IDs and evidence.
 Do not treat `example_only` as a runtime permission switch: the examples are
 outside the active decision directory and the default preset file is empty.
 
@@ -22,3 +22,46 @@ A build may publish a reviewed subset while keeping unresolved candidates
 pending. Actual publication generates kernel/source pages, selected-version
 registry records and indices only in the explicitly chosen target wiki. The
 feature itself ships none of those import outputs.
+
+## Adapting examples to selection
+
+The saved examples predate the selection stage and deliberately contain only
+review excerpts, not a complete inventory or a ready-to-run preset. Keep their
+source observations as evidence to recheck, then use a fresh run's IDs and hashes.
+For the Quack excerpt, a forward/backward pair must not be merged simply because
+both are Softmax. Select both as representatives if independently launched;
+leave the unreviewed forward entry pending at the detailed-review stage. The
+FlashMLA representative still requires its existing-page comparisons.
+
+The new selection file uses this structure (placeholders are not review results):
+
+```yaml
+version: 1
+inventory_digest: <prepared inventory digest>
+entries:
+  - candidate_id: <representative ID>
+    content_digest: <prepared content digest>
+    role: representative
+    rationale: <why this actual launchable implementation was selected>
+    evidence: [{path: <source>, sha256: <hash>, locator: <entry and launcher>}]
+  - candidate_id: <ordinary variant ID>
+    content_digest: <prepared content digest>
+    role: member
+    representative: <representative ID>
+    relation: variant
+    difference_summary: <actual differences and why this is the same implementation>
+    rationale: <why one representative is sufficient>
+    evidence: [{path: <source>, sha256: <hash>, locator: <both compared entries>}]
+  - candidate_id: <internal helper ID>
+    content_digest: <prepared content digest>
+    role: helper
+    caller_basis: <actual callers, launch analysis, why internal-only>
+    rationale: <support purpose>
+    evidence: [{path: <source>, sha256: <hash>, locator: <definition and callers>}]
+```
+
+Keep every prepared entry, including unresolved ones with `role: pending`.
+When sources differ, member evidence needs receipts for both source files and
+relevant dependency/dispatch evidence. Suggestions may be discarded. After
+`select`, edit only representative verdicts and preserve `selection_digest`.
+Members need no duplicate full verdict; helpers need no detailed fact ledger.

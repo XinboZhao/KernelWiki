@@ -9,7 +9,17 @@ repository provenance.
 Only files tracked by the input repository are scanned, including normal
 subdirectories. Gitlinks are recorded in `snapshot.yaml.skipped_submodules` and
 never initialized, fetched or scanned. There is no submodule expansion option.
-Uncommitted worktree changes are excluded and recorded.
+Uncommitted worktree changes are excluded and recorded. CUDA candidates include
+literal `__global__` and standard `CUTLASS_GLOBAL` declarations. A marker is
+only a scan observation; external review still establishes target and launch
+semantics. Qualifier-only macro definitions are not kernel implementations.
+The scanner also recognizes bounded, same-file function-like declaration-prefix
+macros with a literal entry name and an immediate body. It follows local
+redefinitions and `#undef`, and retains the declaration plus selected body as
+evidence. This is not a C++ preprocessor: external macro wrappers, computed names
+and arbitrary template instantiations are not enumerated. Reviewers must record
+such coverage limitations rather than equating scan counts with complete runtime
+kernel coverage.
 
 ## Commands
 
@@ -17,16 +27,87 @@ Run from the wiki root:
 
 ```bash
 python3 scripts/import_repo.py prepare --repo /path/to/repo --revision HEAD
-# Review the printed run directory independently and edit decisions.yaml.
+# First inspect launch relationships and edit selection.yaml independently.
+python3 scripts/import_repo.py select --run <run-id>
+# Review review-targets.yaml and matches.yaml; edit representative decisions.yaml.
 python3 scripts/import_repo.py build --run <run-id>
 python3 scripts/import_repo.py apply --run <run-id>
 python3 scripts/import_repo.py status --run <run-id>
 ```
 
+The compatibility `prepare` command scans and initializes a pending selection
+draft; `select` validates that draft and prepares detailed materials. For explicit
+stage separation use:
+
+```bash
+python3 scripts/import_repo.py scan --repo /path/to/repo --revision HEAD --fresh-review
+python3 scripts/import_repo.py prepare-selection --run <run>
+# External reviewer saves selection.yaml.
+python3 scripts/import_repo.py validate-selection --run <run>
+python3 scripts/import_repo.py prepare-review --run <run>
+# External reviewer saves decisions.yaml.
+python3 scripts/import_repo.py report --run <run> --out /persistent/reports/repo
+```
+
+`report` exports validated implementation lists without building or applying wiki
+pages. A representative counts only after inclusion and all required comparisons
+resolve; helpers and member variants are not separate effective kernels. Reports
+validate field-specific vocabulary and separate unfinished work, genuine
+deferrals and blocked includes. Counts are per
+repository and must not be summed as a globally unique implementation total.
+`--fresh-review` prevents old saved admission/exclusion decisions from populating
+the new detailed draft. It does not conceal existing wiki overlap evidence.
+
 Use `--config PATH` or `--wiki-root PATH` before the subcommand. Scan include and
 exclude patterns use fnmatch; configure nested exclusion patterns explicitly
 when required. Local input must be the repository root, not an arbitrary folder
 inside it. A run ID or a full run-directory path is accepted by `--run`.
+
+## Early selection and review size
+
+`prepare` records every detected definition in `inventory.yaml` and creates a
+pending `selection.yaml`. It does not yet generate detailed verdict templates or
+all-pairs matching material. Same-file buckets and Python call sites are hints,
+not automatic grouping or helper verdicts.
+
+An external reviewer marks actual representatives, confirmed members, helpers
+or pending entries. Helper exclusions require a short caller/launch explanation
+and source evidence. Members require a direct representative, relation,
+difference summary and evidence for both sources. Definitions with uncertain
+status or relationships stay pending. See [the review guide](repo-import-review.md)
+for the exact fields and review standard.
+
+`select` validates complete coverage, hashes and relationships, then generates
+`review-targets.yaml` and representative-only `decisions.yaml`. Helpers have no
+full verdict or page. Members have compact relationship records, not independent
+full reviews. Cross-group and existing-wiki matches discovered on any member
+are retained on its representative. Only explicitly confirmed internal group
+relations replace pairwise comparisons; suggestions cannot bypass review.
+
+A reviewer can split/merge groups or change representatives at any time before
+publication. Rerun `select`; old review files are archived. Unchanged groups may
+reuse still-valid decisions; changed groups and comparisons need renewed review.
+Editing selection after build blocks apply. Full selection and scan history stay
+in persistent run storage. Compact formal records retain admitted relationships,
+necessary evidence, input digests and the immutable external run reference; they
+never copy the entire selection, helper inventory or pending queue into the wiki.
+
+Progress distinguishes scanned definitions, representatives, members, helpers
+and pending work. A raw definition count is not an independent kernel count.
+Unknowns remain pending even if unrelated reviewed representatives publish.
+
+To omit Triton definitions, use a configuration override:
+
+```yaml
+version: 1
+scan:
+  entry_kinds: [cuda_global, cute_kernel]
+```
+
+The default includes CUDA C++, CuTe DSL and Triton. Changing this option is an
+explicit scope choice, independent of helper filtering and representative
+selection. `selection.enabled: false` supports legacy decision manifests and
+restores the old per-candidate workflow; new runs use selection by default.
 
 ## Review and unresolved overlap
 
@@ -36,10 +117,12 @@ and a snapshot of `references/repo-import-review.md`.
 
 Hints cover registered implementations, existing kernel pages and PR assets,
 and same-batch candidates. They are conservative comparisons, not proofs of
-semantic equivalence. They may include false positives and cannot guarantee that
+semantic equivalence. Same-repository PR records remain background context;
+content, source paths or meaningful names establish prepared PR comparison hints.
+They may include false positives and cannot guarantee that
 all duplicate implementations are detected.
 
-Every hint for an included candidate needs an `overlap_resolutions` record:
+Every hint for an included representative needs an `overlap_resolutions` record:
 `match_id`, `outcome` (`distinct` or `same_implementation`), rationale, and
 content-bound evidence citing the matched page/file. For the same implementation,
 choose a `representative` (candidate ID or canonical page ID). Missing or
@@ -47,10 +130,34 @@ unresolved relationships keep that candidate pending; unrelated reviewed
 candidates may still publish. Deleting hints from saved materials cannot bypass
 validation: current matching context is checked again.
 
-For an existing PR with a linked kernel page, reuse that page. If the PR only
+For an existing PR with a linked kernel page, compare that canonical implementation
+and reuse it when equivalent. A PR can contain several implementations: every
+linked canonical page must be resolved, and a separate page is allowed only when
+all of those implementations are source-proven distinct. If the PR only
 records the implementation and no canonical kernel page exists, create one and
 cite the PR as well as the repository snapshot. An existing PR is a source,
 not a separate canonical kernel implementation.
+
+Save source-discovered comparisons in `<run>/discovered-overlaps.yaml`, then run
+`prepare-review` again. Do not edit generated `matches.yaml`:
+
+```yaml
+version: 1
+entries:
+  - candidate_id: candidate-...
+    page_id: kernel-existing-example
+    rationale: The source reveals a shared implementation lineage.
+    input_evidence:
+      - {path: src/example.cu, sha256: <source-hash>, locator: "example at line 42"}
+    matched_evidence:
+      - {path: wiki/kernels/example.md, sha256: <page-hash>, locator: kernel-existing-example}
+```
+
+Receipts must identify the actual input definition and current indexed page or
+its code asset. Unknown IDs, duplicate pairs and stale receipts fail validation.
+The refreshed request exposes these as mandatory comparisons, including PR-linked
+canonical pages and comparisons discovered on group members. Adding, changing or
+removing this input after preparation blocks admission until materials refresh.
 
 ## One representative per implementation
 
@@ -80,15 +187,56 @@ require a separate reviewed page edit rather than `extend_page`.
 The runtime registry stores one full representative version per implementation.
 Other versions/variants retain compact origin, digest, relationship and reason
 records; full scan and review history remains in persistent run storage. The
-page shows only the representative. Its confidence, reproducibility and metrics
-come from that representative's own evidence, not a discarded variant.
+page shows the representative implementation plus a provenance table of member
+paths, entries, pinned origins and relationship reasons. Each member retains its
+own parameter/type limits; a table entry does not expand the representative's
+supported dtype or shape range. Confidence, reproducibility and metrics come
+from the representative's own evidence, not a discarded variant.
+
+## Updating a pinned repository
+
+```bash
+python3 scripts/import_repo.py update --repo /path/to/repo --revision NEW_COMMIT --baseline /persistent/previous-run
+python3 scripts/import_repo.py prepare-review --run <new-run>
+```
+
+`update.yaml` records unchanged, changed, added, missing and ambiguous entries,
+plus possible renames. A rename/body match is a hint, not an equivalence decision.
+The scan receipt binds an explicit `extractor_contract` independently of stable
+per-entry fingerprint encoding. A coverage change requires a new immutable scan;
+old results cannot silently authorize its additional definitions.
+Source, dependency and explicit caller receipts must remain valid before a whole
+selection group can be rebound. Removing a representative invalidates that group's
+automatic reuse; the reviewer chooses any replacement. Detailed decisions require
+current scope policy, group and comparison bindings, not just matching source text.
+
+A changed skipped Gitlink pin also blocks reuse of dependency assumptions; its
+contents are still never fetched or scanned.
+
+Updates carry source-discovered comparisons forward as navigation hints for
+unchanged, changed, ambiguous or possible-renamed successors. A carried hint is
+not an identity decision. Only unchanged complete groups with valid original
+source, target, policy and comparison receipts may reuse their reviewed verdicts.
+Changed sources or targets require renewed comparison; missing targets and
+successor ambiguities remain explicit in update history.
+
+Missing observations authorize no automatic page deletion. Scan configuration or
+extractor/coverage-contract changes, legacy scans without complete receipts, ambiguous overload identities
+and parse failures disable deletion assertions and automatic reuse. Historical
+commits remain valid provenance; removed sources may be discussed and retained.
+
+The external per-repo observation index records the latest observed and latest
+verified complete scan. Only a committed apply transaction records publication;
+scan, initial selection, detailed review, report and build never advance it.
+Incomplete publication cannot replace the complete published baseline. Use
+`update --fresh-review` to prepare a comparison without reusing old review records.
 
 ## Persistence and publication
 
 `data/repo-import.yaml` defines `state_dir` and `checkout_dir`, defaulting to
 ignored `.cache/repo-import/`. Absolute paths are supported. Run history persists
 until explicitly removed; retention and backups are user-managed. A run includes
-snapshot, inventory, matching, guide, decisions, optional `review-attachments/`,
+snapshot, inventory, selection, review targets, matching, guide, decisions, optional `review-attachments/`,
 staging, validation results, publication plan and backup/transaction journal.
 
 Formal outputs are created only after a user executes import into a target wiki:
@@ -107,7 +255,9 @@ Content changes invalidate old decisions. Changed wiki pages or PR code assets
 require a new preparation. Previously admitted unchanged representatives may
 reuse decisions if all current overlaps are resolved. Guide-version changes alone
 do not invalidate prior decisions. Higher execution levels require committed,
-content-bound evidence, and the importer performs no GPU validation.
+content-bound evidence, and the importer performs no GPU validation. Scope/schema
+policy receipts are bound separately from prompt wording; changing applicable
+policy requires renewed review even when kernel text did not change.
 
 ## Examples and presets
 
@@ -117,6 +267,12 @@ fresh materials rather than blindly copying stale context or IDs.
 
 The default `data/repo-import-presets.yaml` is empty. A user can explicitly add a
 preset pinning `repo`, `revision`, `decision_manifest`, and optional scan config,
-then run `python3 scripts/import_repo.py import --preset <name>`. Preset import
+then run `python3 scripts/import_repo.py import --preset <name>`. With selection
+enabled, the manifest must also contain the matching saved `selection`; legacy
+examples require adaptation or explicit legacy mode. Export a portable full input
+pack with `export-audit --run <run> --out /persistent/audit-pack.yaml`; this is
+separate from the compact published manifest and does not publish content. Preset import
+also restores source-discovered comparison inputs from that pack and validates
+their receipts before reusing decisions. It
 reuses valid saved review; changed candidates or unresolved overlaps stop it at
 pending. There is no unconditional skip-review option.

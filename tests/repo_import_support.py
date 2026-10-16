@@ -7,8 +7,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import import_repo
-from repo_import.config import load_config
+from repo_import.config import load_config as base_load_config
 from repo_import.store import read, write, digest
+
+def load_config(root, config_path=None):
+    config = base_load_config(root, config_path)
+    config['selection'] = {'enabled': False}
+    return config
+
 
 CODE = 'import triton\n\n@triton.jit\ndef reduce_kernel(x, n: int):\n    return x + n\n'
 

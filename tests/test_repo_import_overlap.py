@@ -57,6 +57,74 @@ class OverlapTests(unittest.TestCase):
             self.assertNotIn('candidate', item['records'][0])
             self.assertEqual([], registry_errors(wiki))
 
+    def representative_family(self, base):
+        wiki, repo, _, _ = self.batch(base)
+        for filename in ('third.py', 'fourth.py'):
+            (repo / filename).write_text((repo / 'kernel.py').read_text())
+        commit(repo, 'four related implementations')
+        run = import_repo.prepare(wiki, str(repo), 'HEAD', load_config(wiki))
+        request = read(run / 'review-request.yaml')
+        chosen = next(c['candidate_id'] for c in request['candidates'] if c['path'] == 'kernel.py')
+        decisions = []
+        for index, candidate in enumerate(request['candidates']):
+            decision = admission(request, index)
+            if candidate['path'] == 'unrelated.py':
+                resolve_review(request, decision)
+            else:
+                if candidate['candidate_id'] != chosen:
+                    decision.update(action='merge_candidate', relation='variant', target_candidate_id=chosen,
+                                    selection_reason='Keep one common representative for the reviewed family.')
+                resolve_review(request, decision, 'same_implementation', chosen)
+            decisions.append(decision)
+        return wiki, run, request, decisions, chosen
+
+    def test_multi_candidate_family_publishes_one_common_representative(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wiki, run, request, decisions, chosen = self.representative_family(Path(directory))
+            data = self.publish_unit(wiki, run, request, list(reversed(decisions)))
+            self.assertEqual(5, read(run / 'result.yaml')['included'])
+            self.assertEqual([], read(run / 'result.yaml')['pending'])
+            self.assertEqual(2, len(data['implementations']))
+            family = next(item for item in data['implementations'].values()
+                          if item['versions'][item['current_version']]['candidate']['candidate_id'] == chosen)
+            self.assertEqual(1, len(family['versions']))
+            self.assertEqual(3, len(family['records']))
+            self.assertEqual(2, len(list((wiki / 'wiki/kernels/imported').glob('*.md'))))
+            self.assertEqual([], registry_errors(wiki))
+
+    def test_common_representative_must_be_included_and_unblocked(self):
+        from repo_import.decisions import validate_decisions
+        for missing in (False, True):
+            with self.subTest(representative_deferred=missing), tempfile.TemporaryDirectory() as directory:
+                wiki, _, request, decisions, chosen = self.representative_family(Path(directory))
+                canonical = next(d for d in decisions if d['candidate_id'] == chosen)
+                if missing:
+                    canonical['decision'] = 'defer'
+                else:
+                    canonical['overlap_resolutions'] = []
+                selected, pending = validate_decisions(
+                    {'version': 1, 'context_digest': request['context_digest'], 'decisions': decisions},
+                    request, wiki, Path(request['snapshot']['checkout']))
+                self.assertEqual(1, len(selected))
+                self.assertEqual('unrelated.py', selected[0][0]['path'])
+                self.assertEqual(4, len(pending))
+
+    def test_family_reciprocal_comparisons_cannot_choose_conflicting_representatives(self):
+        from repo_import.decisions import validate_decisions
+        with tempfile.TemporaryDirectory() as directory:
+            wiki, _, request, decisions, chosen = self.representative_family(Path(directory))
+            variants = [d for d in decisions if d.get('action') == 'merge_candidate']
+            left, right = variants[:2]
+            match_id = next(h['match_id'] for h in request['matches'][left['candidate_id']]
+                            if h['candidate_id'] == right['candidate_id'])
+            next(r for r in left['overlap_resolutions'] if r['match_id'] == match_id)['representative'] = 'missing'
+            selected, pending = validate_decisions(
+                {'version': 1, 'context_digest': request['context_digest'], 'decisions': decisions},
+                request, wiki, Path(request['snapshot']['checkout']))
+            self.assertIn(left['candidate_id'], pending)
+            self.assertIn(right['candidate_id'], pending)
+            self.assertEqual(3, len(selected))
+
     def test_distinct_batch_requires_comparison_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             wiki, _, run, request = self.batch(Path(directory))
@@ -146,6 +214,45 @@ class OverlapTests(unittest.TestCase):
             resolve_review(request, decision, 'same_implementation', 'kernel-existing')
             self.publish_unit(wiki, run, request, [decision])
             self.assertFalse((wiki / 'wiki/kernels/imported').exists())
+
+    def test_multi_implementation_pr_requires_comparison_with_every_linked_page(self):
+        from repo_import.decisions import validate_decisions
+        with tempfile.TemporaryDirectory() as directory:
+            wiki, repo, _, _ = prepared(Path(directory))
+            self.pr_fixture(wiki, repo)
+            for suffix in ('one', 'two'):
+                (wiki / ('wiki/kernels/' + suffix + '.md')).write_text(markdown(
+                    {'id': 'kernel-' + suffix, 'title': 'Separate implementation ' + suffix,
+                     'sources': ['pr-fixture-1'], 'reproducibility': 'snippet'}, '# Different source contract\n'))
+            run = import_repo.prepare(wiki, str(repo), 'HEAD', load_config(wiki))
+            request = read(run / 'review-request.yaml')
+            decision = resolve_review(request, admission(request), 'distinct')
+            hints = request['matches'][decision['candidate_id']]
+            self.assertEqual({'kernel-one', 'kernel-two'}, {h['page_id'] for h in hints if h['kind'] == 'kernel'})
+            pr = next(h for h in hints if h['kind'] == 'pr')
+            next(r for r in decision['overlap_resolutions'] if r['match_id'] == pr['match_id']).update(
+                outcome='same_implementation', representative=decision['candidate_id'])
+            selected, pending = validate_decisions(document(request, decision), request, wiki, Path(request['snapshot']['checkout']))
+            self.assertEqual((1, []), (len(selected), pending))
+            saved = copy.deepcopy(decision)
+            decision['overlap_resolutions'].pop()
+            selected, pending = validate_decisions(document(request, decision), request, wiki, Path(request['snapshot']['checkout']))
+            self.assertEqual(0, len(selected))
+            self.assertEqual(1, len(pending))
+            decision = copy.deepcopy(saved)
+            canonical = next(r for r in decision['overlap_resolutions'] if r['match_id'] != pr['match_id'])
+            canonical['outcome'] = 'same_implementation'
+            selected, pending = validate_decisions(document(request, decision), request, wiki, Path(request['snapshot']['checkout']))
+            self.assertEqual(0, len(selected))
+            decision = copy.deepcopy(saved)
+            decision['overlap_resolutions'][-1]['evidence'][0]['sha256'] = 'tampered'
+            with self.assertRaisesRegex(ValueError, 'matched evidence'):
+                validate_decisions(document(request, decision), request, wiki, Path(request['snapshot']['checkout']))
+            write(run / 'decisions.yaml', document(request, saved))
+            plan = import_repo.build(wiki, run)
+            page = next(record['path'] for record in plan['files'] if record['path'].startswith('wiki/kernels/imported/'))
+            self.assertIn('pr-fixture-1', (run / 'staging' / page).read_text())
+            self.assertNotIn('wiki/kernels/one.md', [record['path'] for record in plan['files']])
 
     def test_changed_pr_asset_invalidates_context(self):
         with tempfile.TemporaryDirectory() as directory:

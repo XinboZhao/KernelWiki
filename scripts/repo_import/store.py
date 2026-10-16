@@ -18,7 +18,10 @@ def file_hash(path):
 def read(path, default=None):
     if not path.exists():
         return {} if default is None else default
-    return yaml.safe_load(path.read_text()) or ({} if default is None else default)
+    text = path.read_text()
+    loader = getattr(yaml, 'CSafeLoader', None)
+    value = yaml.load(text, Loader=loader) if loader is not None else yaml.safe_load(text)
+    return value or ({} if default is None else default)
 
 
 def atomic_write(path, text):

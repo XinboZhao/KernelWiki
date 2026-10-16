@@ -2,6 +2,7 @@
 import re
 from pathlib import Path
 from functools import lru_cache
+from collections import defaultdict
 from kernel_entries import kernel_entries, CUDA_EXTENSIONS
 from .store import digest, file_hash, read
 from .checkout import canonical_repo
@@ -44,7 +45,8 @@ def existing_index(root):
                            'sha256': file_hash(path), 'title': metadata.get('title', ''), 'kind': kind,
                            'repo': metadata.get('repo', ''), 'sources': metadata.get('sources', []),
                            'kernel_types': metadata.get('kernel_types', []),
-                           'languages': metadata.get('languages', []), 'code_assets': assets})
+                           'languages': metadata.get('languages', []), 'changed_paths': metadata.get('changed_paths', []),
+                           'code_assets': assets})
     for page in result:
         if page['kind'] == 'pr':
             page['kernel_pages'] = [p['page_id'] for p in result if p['kind'] == 'kernel' and page['page_id'] in p['sources']]
@@ -83,7 +85,7 @@ def find_matches(candidate, registered):
     return matches
 
 
-def overlap_index(candidates, registered, pages):
+def overlap_index(candidates, registered, pages, owners=None, discoveries=None):
     """Hints are review blockers, not claims of semantic equivalence."""
     result = {c['candidate_id']: [] for c in candidates}
     page_map = {p['page_id']: p for p in pages}
@@ -91,6 +93,23 @@ def overlap_index(candidates, registered, pages):
     def append(candidate, hint):
         hint['match_id'] = 'overlap-' + digest({'candidate': candidate['candidate_id'], **hint})[:24]
         result[candidate['candidate_id']].append(hint)
+    buckets = defaultdict(set)
+    def tuning_base(name):
+        return re.sub(r'_(?:tile|block)?\d+$', '', name)
+    def batch_keys(c):
+        name = c['entry']
+        base = tuning_base(name)
+        keys = [('body', c['fingerprints']['entry_sha256']), ('file', c['path'])]
+        if name in {'kernel', 'main'}:
+            keys.append(('generic_entry_file', (name, Path(c['path']).name)))
+        else:
+            keys.append(('entry', name))
+        if base not in {'kernel', 'main'} or base != name:
+            keys.append(('tuned', base))
+        return keys
+    for index, item in enumerate(candidates):
+        for key in batch_keys(item):
+            buckets[key].add(index)
     for candidate in candidates:
         for match in find_matches(candidate, registered):
             page = page_map.get(match['page_id'])
@@ -108,22 +127,58 @@ def overlap_index(candidates, registered, pages):
                         any(entry['body_sha256'] == candidate['fingerprints']['entry_sha256'] for entry in asset['entries']) or
                         (same_repo and Path(asset['path']).name == Path(candidate['path']).name)]
             name = repo_name(candidate['origin']['repo'])
-            title_hint = stem not in {'kernel', 'kernels', 'utils', 'main', 'input'} and stem in page['title'].lower()
+            meaningful_stem = stem not in {'kernel', 'kernels', 'utils', 'main', 'input'}
+            normalized_stem = re.sub(r'[^a-z0-9]+', ' ', stem).strip()
+            normalized_title = re.sub(r'[^a-z0-9]+', ' ', page['title'].lower()).strip()
+            title_hint = meaningful_stem and normalized_stem in normalized_title
+            path_hint = same_repo and any(
+                path == candidate['path'] or (meaningful_stem and Path(path).name == Path(candidate['path']).name)
+                for path in page.get('changed_paths', []))
             source_hint = len(name) >= 4 and (name in page['title'].lower() or name in ' '.join(page['sources']).lower())
-            if matching or (same_repo and (not page['code_assets'] or title_hint)) or (page['kind'] == 'kernel' and (title_hint or source_hint)):
+            operation_context = re.sub(r'[^a-z0-9]+', ' ', candidate['path'].lower() + ' ' + candidate['entry'].lower())
+            related_operation = any(
+                re.sub(r'[^a-z0-9]+', ' ', kind.lower()).strip() in operation_context
+                for kind in page.get('kernel_types', []) if kind and kind != 'fused-kernel')
+            if matching or (same_repo and (path_hint or title_hint)) or (page['kind'] == 'kernel' and (
+                    title_hint or (source_hint and related_operation))):
                 evidence = matching[0] if matching else page
                 append(candidate, {'kind': page['kind'], 'page_id': page['page_id'],
                                    'kernel_pages': page.get('kernel_pages', []),
                                    'relation': 'possible_existing_implementation',
                                    'evidence': {'path': evidence['path'], 'sha256': evidence['sha256'], 'locator': page['page_id']}})
-        for other in candidates:
-            if other['candidate_id'] == candidate['candidate_id']:
+        for discovery in (discoveries or {}).get('entries', []):
+            if discovery['candidate_id'] != candidate['candidate_id']:
+                continue
+            page = page_map[discovery['page_id']]
+            # Independent requests remain receipt-bound even if a heuristic also matches.
+            append(candidate, {'kind': page['kind'], 'page_id': page['page_id'],
+                               'kernel_pages': page.get('kernel_pages', []),
+                               'relation': 'possible_existing_implementation',
+                               'evidence': discovery['matched_evidence'][0],
+                               'discovered_overlap': discovery})
+        # A multi-implementation PR's source links are navigation, not identity.
+        # Expose every linked canonical page for a source-bound comparison.
+        for pr_hint in [hint for hint in result[candidate['candidate_id']] if hint['kind'] == 'pr']:
+            for page_id in pr_hint.get('kernel_pages', []):
+                page = page_map.get(page_id)
+                if page is None or any(hint.get('page_id') == page_id for hint in result[candidate['candidate_id']]):
+                    continue
+                append(candidate, {'kind': 'kernel', 'page_id': page_id,
+                                   'relation': 'possible_existing_implementation',
+                                   'evidence': {'path': page['path'], 'sha256': page['sha256'], 'locator': page_id}})
+        neighbors = set().union(*(buckets[key] for key in batch_keys(candidate)))
+        for index in sorted(neighbors):
+            other = candidates[index]
+            if (other['candidate_id'] == candidate['candidate_id'] or
+                    (owners is not None and owners[other['candidate_id']] == owners[candidate['candidate_id']])):
                 continue
             same_body = other['fingerprints']['entry_sha256'] == candidate['fingerprints']['entry_sha256']
             same_entry = (other['entry'] == candidate['entry'] and
                           (Path(other['path']).name == Path(candidate['path']).name or other['entry'] not in {'kernel', 'main'}))
             same_file = other['path'] == candidate['path']
-            tuned_name = re.sub(r'_(?:tile|block)?\d+$', '', other['entry']) == re.sub(r'_(?:tile|block)?\d+$', '', candidate['entry'])
+            base, other_base = tuning_base(candidate['entry']), tuning_base(other['entry'])
+            tuned_name = base == other_base and (base not in {'kernel', 'main'} or
+                         (candidate['entry'] != base and other['entry'] != other_base))
             if same_body or same_entry or same_file or tuned_name:
                 append(candidate, {'kind': 'batch', 'candidate_id': other['candidate_id'],
                                    'relation': 'possible_batch_overlap', 'evidence': {

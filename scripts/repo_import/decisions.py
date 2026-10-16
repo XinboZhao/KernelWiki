@@ -1,10 +1,32 @@
 """Read externally authored decisions. No model execution or prompt loading."""
 from pathlib import Path
-from .store import digest, file_hash, contained
-from .match import overlap_index
+from .store import digest, file_hash, contained, read
+from .selection import review_matches, expand_members, representative_ids
 
 ACTIONS = {'create_page', 'extend_page', 'record_duplicate', 'attach_source', 'retain_page', 'merge_candidate'}
 RELATIONS = {'distinct', 'new_version', 'variant', 'exact_duplicate'}
+
+
+def validate_metadata(metadata, vocabulary):
+    """Apply the wiki's field-specific vocabulary before list-only admission."""
+    topical = ('hardware_features', 'techniques', 'kernel_types', 'languages')
+    fields = ('tags', *topical, 'architectures', 'related', 'sources', 'prerequisites', 'aliases')
+    for field in fields:
+        if field not in metadata:
+            continue
+        values = metadata[field]
+        if (not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+                or len(set(values)) != len(values)):
+            raise ValueError('Metadata requires unique string lists: ' + field)
+        allowed = (set().union(*(vocabulary.get(category, []) for category in topical))
+                   if field == 'tags' else set(vocabulary.get(field, [])))
+        if vocabulary and field in {'tags', *topical, 'architectures'} and set(values) - allowed:
+            raise ValueError('Invalid metadata vocabulary for ' + field + ': ' + ', '.join(sorted(set(values) - allowed)))
+    if 'hardware_features' in metadata and vocabulary:
+        missing = (set(metadata.get('tags', [])) & set(vocabulary.get('hardware_features', []))
+                   - set(metadata['hardware_features']))
+        if missing:
+            raise ValueError('Hardware tags missing from hardware_features: ' + ', '.join(sorted(missing)))
 
 
 def decision_key(candidate):
@@ -102,19 +124,23 @@ def unresolved_overlaps(decision, hints, decisions, root, checkout, all_hints):
         representative = resolution.get('representative')
         if hint['kind'] == 'batch':
             other = decisions.get(hint['candidate_id'], {})
-            if representative == decision['candidate_id']:
-                if other.get('decision') == 'include' and not (
-                        other.get('action') == 'merge_candidate' and other.get('target_candidate_id') == representative):
-                    blocked = True
-            elif representative == hint['candidate_id']:
-                if decision.get('action') != 'merge_candidate' or decision.get('target_candidate_id') != representative:
-                    blocked = True
-            else:
+            chosen = decisions.get(representative, {})
+            if chosen.get('decision') != 'include' or chosen.get('action') not in {
+                    'create_page', 'extend_page', 'attach_source', 'retain_page', 'record_duplicate'}:
                 blocked = True
+            for member in (decision, other):
+                if member.get('decision') == 'include' and member.get('candidate_id') != representative:
+                    if member.get('action') != 'merge_candidate' or member.get('target_candidate_id') != representative:
+                        blocked = True
         elif hint['kind'] == 'pr':
             linked = hint.get('kernel_pages', [])
             if linked:
-                if decision.get('target_page_id') not in linked or decision.get('action') == 'create_page':
+                if decision.get('action') == 'create_page':
+                    distinct_pages = {h['page_id'] for h in hints if h['kind'] in {'kernel', 'registry'}
+                                      and resolutions.get(h['match_id'], {}).get('outcome') == 'distinct'}
+                    if representative != decision['candidate_id'] or not set(linked) <= distinct_pages:
+                        blocked = True
+                elif decision.get('target_page_id') not in linked:
                     blocked = True
             elif decision.get('action') == 'create_page' and representative != decision['candidate_id']:
                 blocked = True
@@ -127,18 +153,27 @@ def unresolved_overlaps(decision, hints, decisions, root, checkout, all_hints):
     return blocked
 
 
-def validate_decisions(document, request, root, checkout):
+def validate_decisions(document, request, root, checkout, *, _matches=None):
+    from .discovery import validate_discoveries
+    validate_discoveries(request.get('discovered_overlaps'), request['candidates'],
+                         request['existing_pages'], root, checkout)
     if document.get('version') != 1:
         raise ValueError('Decision manifest must have version: 1')
     if document.get('context_digest') != request['context_digest']:
         raise ValueError('Decisions refer to stale wiki/registry context; review the refreshed materials')
+    if 'selection' in request and document.get('selection_digest') != digest(request['selection']):
+        raise ValueError('Decisions refer to stale selection; review refreshed groups')
+    document = expand_members(document, request)
     candidates = {item['candidate_id']: item for item in request['candidates']}
     pages = {item['page_id']: item for item in request['existing_pages']}
     implementations = request['registry'].get('implementations', {})
-    hints = overlap_index(request['candidates'], request['registry'], request['existing_pages'])
+    # A selection refresh validates several trial documents against the same
+    # immutable request. Its caller may share one freshly computed hint index.
+    hints = review_matches(request) if _matches is None else _matches
     decisions = {item.get('candidate_id'): item for item in document.get('decisions', [])}
     blocked = set()
     selected, seen = [], set()
+    vocabulary = read(root / 'data/tags.yaml')
     for decision in document.get('decisions', []):
         identity = decision.get('candidate_id')
         if identity not in candidates or identity in seen:
@@ -218,6 +253,7 @@ def validate_decisions(document, request, root, checkout):
         for field in ('title', 'architectures', 'tags', 'kernel_types', 'languages', 'confidence', 'reproducibility'):
             if field not in metadata:
                 raise ValueError('Missing metadata: ' + field)
+        validate_metadata(metadata, vocabulary)
         level = metadata['reproducibility']
         if level not in {'snippet', 'runnable', 'benchmarked'}:
             raise ValueError('Kernel reproducibility must be snippet, runnable, or benchmarked')
@@ -257,19 +293,29 @@ def validate_decisions(document, request, root, checkout):
         blocked.update(newly_blocked)
     selected = [(c, d) for c, d in selected if c['candidate_id'] not in blocked]
     pending = (set(candidates) - seen) | blocked | {d['candidate_id'] for d in document.get('decisions', []) if d['decision'] == 'defer'}
+    pending.update(r['candidate_id'] for r in request.get('selection', {}).get('entries', []) if r['role'] == 'pending')
     return selected, sorted(pending)
 
 
 def rebind_manifest(manifest, request):
     """Reuse content-bound records only against exactly the saved wiki context."""
+    rebind_candidates = request['candidates']
+    if 'selection' in request:
+        if 'selection' not in manifest:
+            raise ValueError('Compact publication records require a separate full audit pack for preset reuse')
+        if manifest.get('selection') != request['selection']:
+            raise ValueError('Saved selection does not match current content')
+        rebind_candidates = [c for c in request['candidates']
+                             if c['candidate_id'] in representative_ids(request['selection'])]
+    binding = {'selection_digest': digest(request['selection'])} if 'selection' in request else {}
     if manifest.get('context_digest') != request['context_digest']:
-        hints = overlap_index(request['candidates'], request['registry'], request['existing_pages'])
+        hints = review_matches(request)
         # A completed import may only reuse versions already admitted with the
         # same receipt. No new candidate is accepted against changed context.
         reused = []
         includes = {d['content_digest']: d for d in manifest.get('decisions', []) if d.get('decision') == 'include'}
         exclusions = {d['content_digest']: d for d in manifest.get('decisions', []) if d.get('decision') == 'exclude'}
-        for candidate in request['candidates']:
+        for candidate in rebind_candidates:
             if candidate['content_digest'] in exclusions:
                 reused.append({**exclusions[candidate['content_digest']], 'candidate_id': candidate['candidate_id']})
                 continue
@@ -295,11 +341,11 @@ def rebind_manifest(manifest, request):
                 retained = reuse_record(candidate, includes.get(candidate['content_digest'], {}), request, hints[candidate['candidate_id']])
                 if retained:
                     reused.append(retained)
-        return {'version': 1, 'context_digest': request['context_digest'], 'decisions': reused}
+        return {'version': 1, 'context_digest': request['context_digest'], 'decisions': reused, **binding}
     old = {item['content_digest']: item for item in manifest.get('decisions', [])}
     rebound = []
-    for candidate in request['candidates']:
+    for candidate in rebind_candidates:
         if candidate['content_digest'] in old:
             rebound.append({**old[candidate['content_digest']], 'candidate_id': candidate['candidate_id']})
     return {'version': 1, 'context_digest': request['context_digest'], 'decisions': rebound,
-            'review_provenance': manifest.get('review_provenance', {})}
+            'review_provenance': manifest.get('review_provenance', {}), **binding}

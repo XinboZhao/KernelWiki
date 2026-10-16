@@ -8,6 +8,50 @@ from repo_import.publish import apply_plan, recover_transaction
 
 
 class PublishTests(unittest.TestCase):
+    def test_formal_manifest_does_not_expand_with_unpublished_selection(self):
+        from repo_import.publish import compact_manifest
+        from repo_import_support import admission
+        with tempfile.TemporaryDirectory() as directory:
+            _, _, run, request = prepared(Path(directory))
+            decision = admission(request)
+            selected = [(request['candidates'][0], decision)]
+            request['selection'] = {'entries': []}
+            before = compact_manifest(run, request, document(request), selected)
+            request['selection']['entries'] = [
+                {'candidate_id': 'helper-' + str(i), 'role': 'helper', 'rationale': 'x' * 1000}
+                for i in range(1000)]
+            after = compact_manifest(run, request, document(request), selected)
+            self.assertEqual(len(str(before)), len(str(after)))
+            self.assertNotIn('selection', after)
+            self.assertNotIn('inventory', after)
+            self.assertNotIn('helper-999', str(after))
+            self.assertNotEqual(before['run_reference']['selection_digest'], after['run_reference']['selection_digest'])
+
+    def test_member_paths_render_without_duplicating_full_versions(self):
+        from test_repo_import_selection import SelectionTests
+        from repo_import.selection import select_run
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = SelectionTests()
+            wiki, run = fixture.prepare(Path(directory))
+            write(run / 'selection.yaml', fixture.confirmed(run))
+            select_run(wiki, run, import_repo.prepare_review)
+            request = read(run / 'review-request.yaml')
+            write(run / 'decisions.yaml', fixture.reviewed(request))
+            plan = import_repo.build(wiki, run)
+            page = next(record['path'] for record in plan['files'] if record['path'].startswith('wiki/kernels/'))
+            text = (run / 'staging' / page).read_text()
+            self.assertIn('Related source entries', text)
+            self.assertIn('| kernel.py | second | variant |', text)
+            self.assertIn('do not imply that the representative entry supports every variant', text)
+            implementation = next(iter(read(run / 'staging/data/repo-import/registry.yaml')['implementations'].values()))
+            self.assertEqual(1, len(implementation['versions']))
+            self.assertNotIn('candidate', implementation['records'][0])
+            self.assertTrue(implementation['records'][0]['evidence'])
+            formal = read(run / 'staging' / next(record['path'] for record in plan['files']
+                                               if record['path'].startswith('data/repo-import/decisions/')))
+            self.assertNotIn('selection', formal)
+            self.assertEqual(1, len(formal['members']))
+
     def plan(self, directory):
         wiki, _, run, request = prepared(directory)
         write(run / 'decisions.yaml', document(request))
@@ -83,6 +127,12 @@ class PublishTests(unittest.TestCase):
             self.assertIn('# Existing page content', staged)
             self.assertIn('reproducibility: benchmarked', staged)
             self.assertNotIn('Fixture reduction', staged)
+            self.assertIn('Related source entries', staged)
+            self.assertIn('| kernel.py | reduce_kernel | exact_duplicate |', staged)
+            plan['validated_digest'] = digest(plan['files'])
+            apply_plan(wiki, run, plan)
+            from repo_import.publish import registry_errors
+            self.assertEqual([], registry_errors(wiki))
 
     def test_changed_decision_after_build_cannot_be_applied(self):
         with tempfile.TemporaryDirectory() as directory:
