@@ -142,7 +142,8 @@ also needs an operation clue from its kernel types and the input path/entry;
 repo attribution alone does not make every kernel a possible copy. All indexed pages remain in the
 review context; inspect other relevant records when the source reveals another
 relationship. A missing hint is not proof of distinctness. Record newly discovered
-overlaps in `discovered-overlaps.yaml` at the run root, with candidate/page IDs,
+overlaps in `discovered-overlaps.yaml` at the run root, with `candidate_id` and
+either an existing `page_id` or a same-run `target_candidate_id`,
 a rationale, `input_evidence` and `matched_evidence` receipts. Use the format in
 [the importer guide](repo-import.md#review-and-unresolved-overlap). Ask the
 maintainer to run `prepare-review` before admitting them; never modify generated

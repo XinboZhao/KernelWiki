@@ -157,10 +157,22 @@ entries:
 ```
 
 Receipts must identify the actual input definition and current indexed page or
-its code asset. Unknown IDs, duplicate pairs and stale receipts fail validation.
+its code asset. For a newly discovered overlap between two scanned candidates,
+replace `page_id` with `target_candidate_id` and cite the target definition in
+`matched_evidence` (its repository-relative path, source hash and
+`"entry at line N"` locator). One record creates mandatory comparisons in both
+directions. Arguments, helpers, launch and output contracts still need review;
+the record itself does not establish equivalence. When both entries belong to
+one explicitly reviewed initial-selection group, that source-bound group relation
+resolves their internal comparison; external comparisons project to its representative.
+Unknown IDs, self comparisons, duplicate pairs (including reversed candidate
+pairs), mixed target kinds and stale receipts fail validation.
 The refreshed request exposes these as mandatory comparisons, including PR-linked
 canonical pages and comparisons discovered on group members. Adding, changing or
 removing this input after preparation blocks admission until materials refresh.
+Updates rebind both ends of candidate comparisons. Changed or ambiguous endpoints
+remain navigation requiring fresh review; missing endpoints stay in update history
+and never imply that an existing wiki implementation should be deleted.
 
 ## One representative per implementation
 

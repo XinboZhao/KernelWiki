@@ -110,11 +110,12 @@ def unresolved_overlaps(decision, hints, decisions, root, checkout, all_hints):
             other = decisions.get(hint['candidate_id'], {})
             reciprocal_ids = {item['match_id'] for item in all_hints[hint['candidate_id']]
                               if item['kind'] == 'batch' and item['candidate_id'] == decision['candidate_id']}
-            reciprocal = next((item for item in other.get('overlap_resolutions', []) if item['match_id'] in reciprocal_ids), None)
-            if other.get('decision') == 'include' and reciprocal and (
-                    reciprocal.get('outcome') != resolution['outcome'] or
-                    (resolution['outcome'] == 'same_implementation' and reciprocal.get('representative') != resolution.get('representative'))):
-                blocked = True
+            for reciprocal in other.get('overlap_resolutions', []):
+                if other.get('decision') == 'include' and reciprocal['match_id'] in reciprocal_ids and (
+                        reciprocal.get('outcome') != resolution['outcome'] or
+                        (resolution['outcome'] == 'same_implementation' and
+                         reciprocal.get('representative') != resolution.get('representative'))):
+                    blocked = True
         if resolution['outcome'] == 'distinct':
             if hint['kind'] == 'batch':
                 other = decisions.get(hint['candidate_id'], {})

@@ -147,6 +147,16 @@ def overlap_index(candidates, registered, pages, owners=None, discoveries=None):
                                    'relation': 'possible_existing_implementation',
                                    'evidence': {'path': evidence['path'], 'sha256': evidence['sha256'], 'locator': page['page_id']}})
         for discovery in (discoveries or {}).get('entries', []):
+            if 'target_candidate_id' in discovery:
+                source, target = discovery['candidate_id'], discovery['target_candidate_id']
+                if candidate['candidate_id'] not in {source, target}:
+                    continue
+                other = target if candidate['candidate_id'] == source else source
+                append(candidate, {'kind': 'batch', 'candidate_id': other,
+                                   'relation': 'possible_batch_overlap',
+                                   'evidence': discovery['matched_evidence' if other == target else 'input_evidence'][0],
+                                   'discovered_overlap': discovery})
+                continue
             if discovery['candidate_id'] != candidate['candidate_id']:
                 continue
             page = page_map[discovery['page_id']]

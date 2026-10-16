@@ -193,6 +193,11 @@ def reuse_update_reviews(root, run):
             if target is None:
                 return None
             discovery['candidate_id'] = target
+            if 'target_candidate_id' in discovery:
+                target = id_map.get(discovery['target_candidate_id'])
+                if target is None:
+                    return None
+                discovery['target_candidate_id'] = target
         return digest(value)
 
     reused = []

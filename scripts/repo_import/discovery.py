@@ -19,6 +19,22 @@ def page_receipt(page):
     return {'path': page['path'], 'sha256': page['sha256'], 'locator': page['page_id']}
 
 
+def discovery_key(row):
+    if 'target_candidate_id' in row:
+        return ('batch', *sorted((row['candidate_id'], row['target_candidate_id'])))
+    return ('page', row['candidate_id'], row.get('page_id'))
+
+
+def definition_receipts(candidate, checkout):
+    expected = definition_receipt(candidate)
+    receipts = [expected]
+    from .match import code_entries
+    definitions = code_entries(str(contained(checkout, candidate['path'])), expected['sha256'])
+    if sum(entry['name'] == candidate['entry'] for entry in definitions) == 1:
+        receipts.append({**expected, 'locator': candidate['entry']})
+    return receipts
+
+
 def validate_discoveries(document, candidates, pages, root, checkout):
     """Require exact known source/target receipts and verify the actual files."""
     if document is None:
@@ -31,24 +47,24 @@ def validate_discoveries(document, candidates, pages, root, checkout):
     for row in document['entries']:
         if not isinstance(row, dict):
             raise ValueError('Invalid discovered overlap entry')
-        key = (row.get('candidate_id'), row.get('page_id'))
+        batch = 'target_candidate_id' in row
+        if batch and 'page_id' in row:
+            raise ValueError('Discovered overlap requires exactly one target kind')
+        key = (row.get('candidate_id'), row.get('target_candidate_id') if batch else row.get('page_id'))
         if (not all(isinstance(value, str) for value in key) or
-                key[0] not in inputs or key[1] not in targets):
+                key[0] not in inputs or key[1] not in (inputs if batch else targets) or
+                (batch and key[0] == key[1])):
             raise ValueError('Unknown discovered overlap candidate/page or candidate outside review coverage')
-        if key in seen:
-            raise ValueError('Duplicate discovered overlap candidate-page pair')
-        seen.add(key)
+        pair = discovery_key(row)
+        if pair in seen:
+            raise ValueError('Duplicate discovered overlap pair')
+        seen.add(pair)
         if not isinstance(row.get('rationale'), str) or not row['rationale'].strip():
             raise ValueError('Discovered overlap requires a rationale')
-        candidate, page = inputs[key[0]], targets[key[1]]
-        expected_input = definition_receipt(candidate)
-        # A bare entry name is exact only when it identifies one definition in this file.
-        input_receipts = [expected_input]
-        from .match import code_entries
-        definitions = code_entries(str(contained(checkout, candidate['path'])), expected_input['sha256'])
-        if sum(entry['name'] == candidate['entry'] for entry in definitions) == 1:
-            input_receipts.append({**expected_input, 'locator': candidate['entry']})
-        target_receipts = [page_receipt(page)]
+        candidate = inputs[key[0]]
+        input_receipts = definition_receipts(candidate, checkout)
+        page = {} if batch else targets[key[1]]
+        target_receipts = (definition_receipts(inputs[key[1]], checkout) if batch else [page_receipt(page)])
         for asset in page.get('code_assets', []):
             target_receipts.append({'path': asset['path'], 'sha256': asset['sha256'], 'locator': page['page_id']})
             for entry in asset['entries']:
@@ -56,7 +72,7 @@ def validate_discoveries(document, candidates, pages, root, checkout):
                     continue
                 target_receipts.append({'path': asset['path'], 'sha256': asset['sha256'], 'locator': entry['name']})
         for field, expected, base in [('input_evidence', input_receipts, checkout),
-                                      ('matched_evidence', target_receipts, root)]:
+                                      ('matched_evidence', target_receipts, checkout if batch else root)]:
             receipts = row.get(field)
             if not isinstance(receipts, list) or not receipts:
                 raise ValueError('Discovered overlap requires source and matched evidence')
@@ -105,11 +121,40 @@ def retain_update_discoveries(root, run, baseline, report, inventory):
     pages = {p['page_id']: p for p in existing_index(root)}
     current = {c['candidate_id']: c for c in inventory['candidates']}
     rows, seen, history, pending = [], set(), [], []
-    previous_rows = {(r['candidate_id'], r['page_id']): r for r in unresolved + previous['entries']}
+    previous_rows = {discovery_key(r): r for r in unresolved + previous['entries']}
     for row in previous_rows.values():
         if row['candidate_id'] not in old_candidates:
             raise ValueError('Unknown baseline discovered overlap candidate')
         targets = sorted(successors.get(row['candidate_id'], set()))
+        if 'target_candidate_id' in row:
+            other = row['target_candidate_id']
+            if other not in old_candidates:
+                raise ValueError('Unknown baseline discovered overlap target candidate')
+            target_successors = sorted(successors.get(other, set()))
+            history.append({'previous': row, 'successors': targets, 'target_successors': target_successors,
+                            'status': 'retained_navigation_only' if targets and target_successors else 'no_observed_successor'})
+            for identity in targets:
+                for target in target_successors:
+                    renewed = {**copy.deepcopy(row), 'candidate_id': identity, 'target_candidate_id': target}
+                    key = discovery_key(renewed)
+                    if identity == target or key in seen:
+                        continue
+                    seen.add(key)
+                    unchanged = (report['id_map'].get(row['candidate_id']) == identity and
+                                 report['id_map'].get(other) == target and not report['incompatible_scan'])
+                    if unchanged:
+                        try:
+                            validate_discoveries({'version': 1, 'entries': [renewed]}, inventory['candidates'],
+                                                 list(pages.values()), root,
+                                                 Path(read(run / 'snapshot.yaml')['checkout']))
+                        except (ValueError, OSError, KeyError):
+                            unchanged = False
+                    if not unchanged:
+                        renewed.update(rationale='Retained comparison request from update baseline; navigation only. ' + row['rationale'],
+                                       input_evidence=[definition_receipt(current[identity])],
+                                       matched_evidence=[definition_receipt(current[target])])
+                    rows.append(renewed)
+            continue
         status = ('missing_current_page' if row['page_id'] not in pages else
                   'no_observed_successor' if not targets else 'retained_navigation_only')
         history.append({'previous': row, 'successors': targets, 'status': status})
@@ -119,7 +164,7 @@ def retain_update_discoveries(root, run, baseline, report, inventory):
         if status != 'retained_navigation_only':
             continue
         for identity in targets:
-            key = (identity, row['page_id'])
+            key = ('page', identity, row['page_id'])
             if key in seen:
                 continue
             seen.add(key)

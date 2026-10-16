@@ -45,6 +45,153 @@ class DiscoveredOverlapTests(unittest.TestCase):
         prepare_review(self.wiki, self.run, read(self.run / 'snapshot.yaml'), read(self.run / 'inventory.yaml'))
         return read(self.run / 'review-request.yaml')
 
+    def batch_discovery(self, same_file=False):
+        code = 'import triton\n@triton.jit\ndef negate(value):\n    return -value\n'
+        if same_file:
+            path = self.repo / 'kernel.py'
+            path.write_text(path.read_text() + code)
+        else:
+            (self.repo / 'second.py').write_text(code)
+        commit(self.repo)
+        self.run = import_repo.prepare(self.wiki, str(self.repo), 'HEAD', load_config(self.wiki))
+        candidates = read(self.run / 'inventory.yaml')['candidates']
+        first, second = candidates
+        self.discovery = {'version': 1, 'entries': [{
+            'candidate_id': first['candidate_id'], 'target_candidate_id': second['candidate_id'],
+            'rationale': 'Source inspection found a possible relationship outside automatic matching.',
+            'input_evidence': [definition_receipt(first)], 'matched_evidence': [definition_receipt(second)]}]}
+        return self.refresh()
+
+    def test_discovered_batch_overlap_is_reciprocal_mandatory_and_exported(self):
+        request = self.batch_discovery()
+        for candidate in request['candidates']:
+            hints = request['matches'][candidate['candidate_id']]
+            self.assertEqual(1, len(hints))
+            self.assertEqual('batch', hints[0]['kind'])
+            self.assertNotEqual(candidate['candidate_id'], hints[0]['candidate_id'])
+        decisions = [admission(request, i) for i in range(2)]
+        saved = {**document(request), 'decisions': decisions}
+        selected, pending = validate_decisions(saved, request, self.wiki, Path(request['snapshot']['checkout']))
+        self.assertFalse(selected)
+        self.assertEqual(2, len(pending))
+        for decision in decisions:
+            resolve_review(request, decision)
+        selected, pending = validate_decisions(saved, request, self.wiki, Path(request['snapshot']['checkout']))
+        self.assertEqual((2, []), (len(selected), pending))
+        write(self.run / 'decisions.yaml', saved)
+        self.assertEqual(self.discovery, export_audit_pack(self.wiki, self.run, self.run / 'batch-pack.yaml')['discovered_overlaps'])
+        self.discovery['entries'][0]['rationale'] += ' changed'
+        write(self.run / 'discovered-overlaps.yaml', self.discovery)
+        self.assertIn('Discovered overlaps changed', self.cli('report').stderr)
+
+    def test_batch_discovery_rejects_invalid_or_reversed_duplicate_pairs(self):
+        request = self.batch_discovery()
+        original = copy.deepcopy(self.discovery)
+        for change in ('unknown', 'self', 'mixed', 'reverse', 'locator', 'hash'):
+            with self.subTest(change=change):
+                self.discovery = copy.deepcopy(original)
+                row = self.discovery['entries'][0]
+                if change == 'unknown': row['target_candidate_id'] = 'unknown'
+                elif change == 'self': row['target_candidate_id'] = row['candidate_id']
+                elif change == 'mixed': row['page_id'] = 'pr-unrelated'
+                elif change == 'reverse':
+                    self.discovery['entries'].append({**row, 'candidate_id': row['target_candidate_id'],
+                                                      'target_candidate_id': row['candidate_id'],
+                                                      'input_evidence': row['matched_evidence'],
+                                                      'matched_evidence': row['input_evidence']})
+                elif change == 'locator': row['matched_evidence'][0]['locator'] = 'uninspected'
+                else: row['matched_evidence'][0]['sha256'] = '0' * 64
+                with self.assertRaises(ValueError): self.refresh()
+
+    def test_all_reciprocal_batch_comparisons_must_agree(self):
+        request = self.batch_discovery(same_file=True)
+        decisions = [resolve_review(request, admission(request, i)) for i in range(2)]
+        self.assertEqual(2, len(decisions[1]['overlap_resolutions']))
+        # A heuristic and an independently discovered request address the same pair.
+        decisions[1]['overlap_resolutions'][1].update(outcome='same_implementation',
+                                                     representative=decisions[0]['candidate_id'])
+        saved = {**document(request), 'decisions': decisions}
+        selected, pending = validate_decisions(saved, request, self.wiki, Path(request['snapshot']['checkout']))
+        self.assertFalse(selected)
+        self.assertEqual(2, len(pending))
+
+    def test_discovered_batch_member_projects_both_directions_and_skips_internal_pair(self):
+        self.batch_discovery()
+        (self.repo / 'member.py').write_text((self.repo / 'kernel.py').read_text().replace('reduce_kernel', 'member_kernel'))
+        commit(self.repo)
+        self.run = import_repo.prepare(self.wiki, str(self.repo), 'HEAD', load_config(self.wiki))
+        selection = self.selection(self.run)
+        candidates = {c['path']: c for c in read(self.run / 'inventory.yaml')['candidates']}
+        first, member, other = [candidates[p] for p in ('kernel.py', 'member.py', 'second.py')]
+        row = next(r for r in selection['entries'] if r['candidate_id'] == member['candidate_id'])
+        row.update(role='member', representative=first['candidate_id'], relation='variant',
+                   difference_summary='Fixture actual copied-body relation.',
+                   evidence=[definition_receipt(member), definition_receipt(first)])
+        write(self.run / 'selection.yaml', selection)
+        def pair(a, b):
+            return {'candidate_id': a['candidate_id'], 'target_candidate_id': b['candidate_id'],
+                    'rationale': 'Fixture source-discovered comparison.',
+                    'input_evidence': [definition_receipt(a)], 'matched_evidence': [definition_receipt(b)]}
+        write(self.run / 'discovered-overlaps.yaml', {'version': 1, 'entries': [pair(member, other), pair(first, member)]})
+        select_run(self.wiki, self.run)
+        request = read(self.run / 'review-request.yaml')
+        self.assertEqual([], request['matches'][member['candidate_id']])
+        for a, b in ((first, other), (other, first)):
+            hints = [h for h in request['matches'][a['candidate_id']] if h.get('discovered_overlap')]
+            self.assertEqual(1, len(hints))
+            self.assertEqual(b['candidate_id'], hints[0]['candidate_id'])
+
+    def test_batch_update_reuses_only_when_both_endpoints_are_unchanged(self):
+        request = self.batch_discovery()
+        self.selection(self.run)
+        select_run(self.wiki, self.run)
+        request = read(self.run / 'review-request.yaml')
+        write(self.run / 'decisions.yaml', {**document(request), 'selection_digest': digest(request['selection']),
+              'decisions': [resolve_review(request, admission(request, i)) for i in range(2)]})
+        (self.repo / 'README.md').write_text('unrelated commit\n')
+        commit(self.repo)
+        new = import_repo.prepare(self.wiki, str(self.repo), 'HEAD', load_config(self.wiki), scan_only=True)
+        prepare_selection(self.wiki, new)
+        prepare_update(self.wiki, new, self.run)
+        select_run(self.wiki, new)
+        self.assertEqual(2, len(reuse_update_reviews(self.wiki, new)))
+        # A changed counterpart invalidates the previous comparison on BOTH sides.
+        path = self.repo / 'second.py'
+        path.write_text(path.read_text().replace('-value', 'value * value'))
+        commit(self.repo)
+        changed = import_repo.prepare(self.wiki, str(self.repo), 'HEAD', load_config(self.wiki), scan_only=True)
+        prepare_selection(self.wiki, changed)
+        report = prepare_update(self.wiki, changed, new)
+        self.assertEqual(1, len(report['changed']))
+        self.selection(changed)
+        select_run(self.wiki, changed)
+        self.assertEqual([], reuse_update_reviews(self.wiki, changed))
+        refreshed = read(changed / 'discovered-overlaps.yaml')['entries'][0]
+        target = next(c for c in read(changed / 'inventory.yaml')['candidates'] if c['candidate_id'] == refreshed['target_candidate_id'])
+        self.assertEqual(definition_receipt(target), refreshed['matched_evidence'][0])
+
+    def test_batch_update_retains_renames_and_missing_target_history(self):
+        self.batch_discovery()
+        self.selection(self.run)
+        original = (self.repo / 'second.py').read_text()
+        (self.repo / 'second.py').unlink()
+        (self.repo / 'renamed.py').write_text(original)
+        (self.repo / 'copied.py').write_text(original)
+        commit(self.repo)
+        new = import_repo.prepare(self.wiki, str(self.repo), 'HEAD', load_config(self.wiki), scan_only=True)
+        prepare_selection(self.wiki, new)
+        report = prepare_update(self.wiki, new, self.run)
+        self.assertEqual(2, len(read(new / 'discovered-overlaps.yaml')['entries']))
+        self.assertEqual(2, len(report['discovered_overlap_history'][0]['target_successors']))
+        (self.repo / 'renamed.py').unlink()
+        (self.repo / 'copied.py').unlink()
+        commit(self.repo)
+        missing = import_repo.prepare(self.wiki, str(self.repo), 'HEAD', load_config(self.wiki), scan_only=True)
+        prepare_selection(self.wiki, missing)
+        removed = prepare_update(self.wiki, missing, new)
+        self.assertFalse(read(missing / 'discovered-overlaps.yaml')['entries'])
+        self.assertTrue(all(h['status'] == 'no_observed_successor' for h in removed['discovered_overlap_history']))
+
     def cli(self, command):
         return subprocess.run([sys.executable, str(ROOT / 'scripts/import_repo.py'), '--wiki-root', str(self.wiki),
                                command, '--run', str(self.run)], text=True, capture_output=True)
