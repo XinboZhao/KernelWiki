@@ -190,6 +190,9 @@ class SelectionTests(unittest.TestCase):
     def test_detailed_duplicate_refreshes_selection_and_preserves_unaffected_review(self):
         with tempfile.TemporaryDirectory() as directory:
             wiki, run = self.prepare(Path(directory))
+            guide = wiki / 'references/repo-import-review.md'
+            guide.parent.mkdir(parents=True, exist_ok=True)
+            guide.write_text('Original review guidance.\n')
             selection = self.confirmed(run)
             rows = {r['entry']: r for r in selection['entries']}
             for row in rows.values():
@@ -206,6 +209,10 @@ class SelectionTests(unittest.TestCase):
                 'evidence': rows['helper']['evidence']}
             document['decisions'].append(exclusion)
             write(run / 'decisions.yaml', document)
+            previous_request = read(run / 'review-request.yaml')
+            previous_targets = read(run / 'review-targets.yaml')
+            previous_instructions = (run / 'review.md').read_text()
+            guide.write_text('Updated review guidance.\n')
 
             # A new relationship belongs in selection, not a chain of full verdicts.
             invalid = copy.deepcopy(document)
@@ -215,6 +222,12 @@ class SelectionTests(unittest.TestCase):
             rows['second'].update(role='member', representative=rows['first']['candidate_id'])
             write(run / 'selection.yaml', selection)
             select_run(wiki, run, import_repo.prepare_review)
+            archive = run / 'review-attachments' / ('selection-' + digest(previous_request)[:24])
+            self.assertEqual('Original review guidance.\n', (archive / 'review-guide.md').read_text())
+            self.assertEqual(previous_instructions, (archive / 'review.md').read_text())
+            self.assertEqual(previous_targets, read(archive / 'review-targets.yaml'))
+            self.assertEqual(document, read(archive / 'decisions.yaml'))
+            self.assertEqual('Updated review guidance.\n', (run / 'review-guide.md').read_text())
             refreshed = read(run / 'decisions.yaml')
             self.assertEqual(exclusion, next(d for d in refreshed['decisions']
                                              if d['candidate_id'] == support['candidate_id']))

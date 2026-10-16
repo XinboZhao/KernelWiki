@@ -8,7 +8,7 @@ import copy
 from collections import defaultdict
 from pathlib import Path
 
-from .store import contained, digest, file_hash, read, write
+from .store import contained, digest, file_hash, read, write, atomic_write
 from .match import overlap_index
 
 KINDS = {'cuda_global', 'cute_kernel', 'triton_jit'}
@@ -195,10 +195,17 @@ def select_run(root, run, prepare_review=None):
         old_document = read(run / 'decisions.yaml')
         old = read(run / 'review-request.yaml')
         archive = run / 'review-attachments' / ('selection-' + digest(old)[:24])
-        for name in ('review-request.yaml', 'decisions.yaml', 'matches.yaml', 'selection.yaml'):
+        for name in ('review-request.yaml', 'decisions.yaml', 'matches.yaml', 'selection.yaml',
+                     'review-targets.yaml'):
             value = old.get('selection') if name == 'selection.yaml' else read(run / name)
             if value is not None:
                 write(archive / name, value)
+        # Preserve the actual prompts read in this round before preparation
+        # replaces them with the current guide. Prompt-only updates do not
+        # invalidate verdicts, but must remain visible in the audit history.
+        for name in ('review-guide.md', 'review.md'):
+            if (run / name).exists():
+                atomic_write(archive / name, (run / name).read_text())
     prepare_review(root, run, snapshot, {'candidates': active, 'failures': inventory['failures']}, selection)
     if old is not None and old.get('context_digest') == read(run / 'review-request.yaml')['context_digest']:
         reuse_unchanged_reviews(root, run, old, old_document)

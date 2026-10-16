@@ -87,6 +87,9 @@ relations replace pairwise comparisons; suggestions cannot bypass review.
 A reviewer can split/merge groups or change representatives at any time before
 publication. Rerun `select`; old review files are archived. Unchanged groups may
 reuse still-valid decisions; changed groups and comparisons need renewed review.
+Archives retain the previous request, targets, decisions, matches, selection and
+the actual review guide/instructions used in that round, including prompt-only
+revisions that do not invalidate otherwise valid decisions.
 Editing selection after build blocks apply. Full selection and scan history stay
 in persistent run storage. Compact formal records retain admitted relationships,
 necessary evidence, input digests and the immutable external run reference; they
