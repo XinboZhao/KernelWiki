@@ -95,6 +95,10 @@ def reuse_record(candidate, previous, request, hints):
         if not known:
             continue
         page = next(page for page in request['existing_pages'] if page['page_id'] == item['page_id'])
+        if item.get('managed') is False:
+            receipt = item['versions'][item['current_version']].get('page_evidence', {})
+            if receipt.get('path') != page['path'] or receipt.get('sha256') != page['sha256']:
+                continue
         return {**previous, 'candidate_id': candidate['candidate_id'],
                 'action': 'record_duplicate' if previous['relation'] == 'exact_duplicate' else 'retain_page',
                 'target_implementation_id': identity, 'target_page_id': item['page_id'],

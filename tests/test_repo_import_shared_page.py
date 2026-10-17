@@ -89,6 +89,23 @@ class SharedExistingPageTests(unittest.TestCase):
                 self.assertEqual([], selected)
                 self.assertEqual(2, len(pending))
 
+    def test_changed_existing_page_invalidates_saved_attribution_even_if_anchors_remain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wiki, repo, run, request, decisions, page = self.fixture(Path(directory))
+            document = self.document(request, decisions)
+            write(run / 'decisions.yaml', document)
+            plan = import_repo.build(wiki, run)
+            plan['validated_digest'] = digest(plan['files'])
+            apply_plan(wiki, run, plan)
+            page.write_text(page.read_text().replace('DenseScheduleBranch',
+                                                    'DenseScheduleBranch with changed canonical computation'))
+            repeated = import_repo.prepare(wiki, str(repo), 'HEAD', load_config(wiki))
+            new_request = read(repeated / 'review-request.yaml')
+            replay = rebind_manifest(document, new_request)
+            self.assertEqual([], replay['decisions'])
+            self.assertEqual([], self.check(wiki, new_request, replay['decisions'])[0])
+            self.assertTrue(all(d['decision'] == 'defer' for d in read(repeated / 'decisions.yaml')['decisions']))
+
     def test_forged_or_stale_anchor_receipt_rejected(self):
         for mode in ('forged', 'empty', 'stale'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:

@@ -353,6 +353,10 @@ Missing scopes or comparisons keep the group pending. This does not turn duplica
 implementations into separate branches: equivalent versions still select one
 representative. Publication preserves one existing page and one registry record,
 with separate compact source relationships and their scoped receipts.
+Saved existing-page attribution is reusable only while its registered page receipt
+matches the current page. An external page edit requires fresh review even when
+the same anchor text survives. Importer-owned attribution updates renew that
+receipt as part of the validated publication plan.
 The registry stores the selected existing kernel page's receipt and actual classification;
 incoming content is only a compact relationship record. A reviewed equivalent
 copy whose fingerprints differ may use record_duplicate with explicit input and
