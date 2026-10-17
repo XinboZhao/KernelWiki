@@ -47,6 +47,51 @@ class EntryTests(unittest.TestCase):
         source = '#define CUTLASS_GLOBAL __global__\ninline void host_only(int* x) { x[0] = 1; }\n'
         self.assertEqual([], cuda_kernel_entries(source))
 
+    def test_cuda_qualifier_macro_binds_functions_not_attributes_or_intervening_types(self):
+        source = ('#define GPU_ENTRY __global__ __launch_bounds__(Trait::threads, 1) inline\n'
+                  'struct Params { int count; };\n'
+                  'enum class Mode { one, two };\n'
+                  'inline int helper(int x) { return x + 1; }\n'
+                  'template<typename Trait>\n'
+                  'GPU_ENTRY void first(Params params) { compute(params); }\n'
+                  'GPU_ENTRY void prototype(Params params);\n'
+                  'GPU_ENTRY void second(Params params) { other(params); }\n')
+        entries = cuda_kernel_entries(source)
+        self.assertEqual(['first', 'second'], [entry.name for entry in entries])
+        self.assertEqual([6, 8], [entry.line for entry in entries])
+        changed = cuda_kernel_entries(source.replace('compute(params)', 'compute_new(params)'))
+        self.assertNotEqual(entries[0].body_sha256, changed[0].body_sha256)
+        self.assertEqual(entries[1].body_sha256, changed[1].body_sha256)
+
+    def test_cuda_unused_or_unknown_qualifier_macros_never_capture_host_helpers(self):
+        source = ('#define UNUSED __global__ __launch_bounds__(128, 2)\n'
+                  '#define UNKNOWN __global__ unsupported_qualifier(128)\n'
+                  'struct alignas(16) Params { int value; };\n'
+                  'inline void host_only() { work(); }\n')
+        self.assertEqual([], cuda_kernel_entries(source))
+
+    def test_cuda_qualifier_alias_lifetime_and_balanced_signature(self):
+        source = ('#define GPU_ENTRY __global__ __cluster_dims__(2, 1, 1)\n'
+                  'GPU_ENTRY void first(int value = nested(1, call(2))) { use(value); }\n'
+                  '#undef GPU_ENTRY\n'
+                  'GPU_ENTRY void ignored() { unrelated(); }\n'
+                  '#define GPU_ENTRY __global__ __launch_bounds__(64)\n'
+                  'GPU_ENTRY void second(int value) __attribute__((unused)) { use(value + 1); }\n')
+        entries = cuda_kernel_entries(source)
+        self.assertEqual(['first', 'second'], [entry.name for entry in entries])
+        self.assertEqual([2, 6], [entry.line for entry in entries])
+
+    def test_cuda_qualifier_alias_snippet_includes_definition_and_only_selected_body(self):
+        from kernel_entries import kernel_snippet
+        definition = '#define GPU_ENTRY __global__ __launch_bounds__(128, 2)\n'
+        selected = 'template<int N>\nGPU_ENTRY void selected(int* x) { x[0] = N; }\n'
+        source = definition + 'struct Params { int count; };\n' + selected + 'GPU_ENTRY void other(int* x) { x[1] = 2; }\n'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'kernel.cuh'
+            path.write_text(source)
+            entry = cuda_kernel_entries(source)[0]
+            self.assertEqual(definition + '\n' + selected, kernel_snippet(path, entry.name, entry.line))
+
     def test_selected_snippet_never_publishes_unreviewed_definition(self):
         from kernel_entries import kernel_snippet
         with tempfile.TemporaryDirectory() as directory:

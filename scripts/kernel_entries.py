@@ -233,12 +233,92 @@ def cuda_prefix_invocations(masked, directives, prefixes):
                 yield first.group(1), match.start(), position, body_end, definition_start, definition_end
 
 
+def cuda_qualifier_macros(masked):
+    """Recognize same-file object-like CUDA declaration qualifiers lexically."""
+    directives = list(cpp_directives(masked))
+    declarations, aliases = [], []
+    for start, end in directives:
+        logical = re.sub(r'\\\r?\n', ' ', masked[start:end])
+        match = re.match(r'[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)([ \t]+)(.*)', logical, re.DOTALL)
+        if not match:
+            continue
+        name, _, replacement = match.groups()
+        if not CUDA_GLOBAL_MARKER.search(replacement) or re.search(r'[{};#]', replacement):
+            continue
+        # Even unsupported bodyless aliases must not capture a later struct or
+        # host helper as though that were the macro's kernel body.
+        declarations.append((start, end))
+        qualifier = re.compile(r'\s*(?:__global__|CUTLASS_GLOBAL|static|inline|__forceinline__|void)\b')
+        attribute = re.compile(r'\s*(?:__launch_bounds__|__cluster_dims__|__attribute__|__declspec|alignas)\s*(?=\()')
+        position = 0
+        while position < len(replacement) and replacement[position:].strip():
+            token = qualifier.match(replacement, position)
+            if token:
+                position = token.end()
+                continue
+            token = attribute.match(replacement, position)
+            if token:
+                position = cpp_parenthesis_end(replacement, token.end())
+                if position is not None:
+                    continue
+            break
+        else:
+            # CUTLASS_GLOBAL is already a built-in marker; preserve its existing
+            # definition locations and snippet representation.
+            if name == 'CUTLASS_GLOBAL':
+                continue
+            stop = len(masked)
+            for later_start, later_end in directives:
+                if later_start >= end and re.match(
+                    r'[ \t]*#[ \t]*(?:define|undef)[ \t]+' + re.escape(name) + r'\b',
+                    masked[later_start:later_end],
+                ):
+                    stop = later_start
+                    break
+            aliases.append((name, start, end, stop))
+    return declarations, aliases
+
+
+def cuda_qualifier_invocations(masked, directives, aliases):
+    """Bind a qualifier use to one named function, excluding attribute calls."""
+    attributes = {'__launch_bounds__', '__cluster_dims__', '__attribute__', '__declspec',
+                  'alignas', 'decltype', 'noexcept'}
+    for macro, definition_start, definition_end, stop in aliases:
+        for match in re.finditer(r'\b' + re.escape(macro) + r'\b', masked[definition_end:stop]):
+            position = definition_end + match.start()
+            if any(start <= position < end for start, end in directives):
+                continue
+            header_start = definition_end + match.end()
+            terminator = re.search(r'[;{]', masked[header_start:stop])
+            if terminator is None or terminator.group() != '{':
+                continue
+            body_start = header_start + terminator.start()
+            cursor, names = header_start, []
+            while cursor < body_start:
+                call = re.search(r'([A-Za-z_]\w*)\s*\(', masked[cursor:body_start])
+                if call is None:
+                    break
+                end = cpp_parenthesis_end(masked, cursor + call.end() - 1, body_start)
+                if end is None:
+                    break
+                if call.group(1) not in attributes:
+                    names.append(call.group(1))
+                cursor = end
+            if len(names) != 1:
+                continue
+            body_end = cpp_body_end(masked, body_start)
+            if body_end is not None:
+                yield names[0], position, body_start, body_end, definition_start, definition_end
+
+
 def cuda_syntax(text):
     """Hide qualifier aliases and declaration scaffolds with stable offsets."""
     masked = mask_cpp(text)
     alias = re.compile(r"(?m)^[ \t]*#[ \t]*define[ \t]+\w+[ \t]+(?:__global__|CUTLASS_GLOBAL)(?:[ \t]+(?:static|inline))*[ \t]*$")
     masked = alias.sub(lambda match: ' ' * len(match.group()), masked)
     _, declarations, _ = cuda_prefix_macros(masked)
+    qualifier_declarations, _ = cuda_qualifier_macros(masked)
+    declarations += qualifier_declarations
     for start, end in declarations:
         masked = masked[:start] + ''.join('\n' if c == '\n' else ' ' for c in masked[start:end]) + masked[end:]
     return masked
@@ -250,9 +330,13 @@ def cuda_kernel_entries(text: str) -> list[KernelEntry]:
     seen = set()
     masked = mask_cpp(text)
     directives, _, prefixes = cuda_prefix_macros(masked)
+    _, aliases = cuda_qualifier_macros(masked)
     definitions = [(name, position, body_start, body_end)
                    for name, position, body_start, body_end, _, _
                    in cuda_prefix_invocations(masked, directives, prefixes)]
+    definitions.extend((name, position, body_start, body_end)
+                       for name, position, body_start, body_end, _, _
+                       in cuda_qualifier_invocations(masked, directives, aliases))
     for marker in CUDA_GLOBAL_MARKER.finditer(syntax_text):
         terminator = re.search(r"[;{]", syntax_text[marker.end() :])
         if not terminator or terminator.group() != "{":
@@ -312,7 +396,10 @@ def kernel_snippet(path: Path, name: str, line: int) -> str:
         offset = sum(len(item) for item in lines[:line - 1])
         source_masked = mask_cpp(text)
         directives, _, prefixes = cuda_prefix_macros(source_masked)
-        for entry_name, position, _, end, definition_start, definition_end in cuda_prefix_invocations(source_masked, directives, prefixes):
+        _, aliases = cuda_qualifier_macros(source_masked)
+        macro_definitions = [*cuda_prefix_invocations(source_masked, directives, prefixes),
+                             *cuda_qualifier_invocations(source_masked, directives, aliases)]
+        for entry_name, position, _, end, definition_start, definition_end in macro_definitions:
             if entry_name != name or text[:position].count('\n') + 1 != line:
                 continue
             prefix_start = offset

@@ -14,7 +14,10 @@ literal `__global__` and standard `CUTLASS_GLOBAL` declarations. A marker is
 only a scan observation; external review still establishes target and launch
 semantics. Qualifier-only macro definitions are not kernel implementations.
 The scanner also recognizes bounded, same-file function-like declaration-prefix
-macros with a literal entry name and an immediate body. It follows local
+macros with a literal entry name and an immediate body, plus object-like aliases
+containing only CUDA qualifiers and known balanced launch attributes. Each alias
+use is bound to its actual named function and physical source line; declarations,
+prototypes and unrelated following structs are not kernels. It follows local
 redefinitions and `#undef`, and retains the declaration plus selected body as
 evidence. This is not a C++ preprocessor: external macro wrappers, computed names
 and arbitrary template instantiations are not enumerated. Reviewers must record
