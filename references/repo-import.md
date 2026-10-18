@@ -95,6 +95,9 @@ cross-candidate relationships, so a large completed review does not require a
 full validation per decision. If an old record is invalid or conflicts with
 another target, independent valid records can still be reused; unresolved
 records remain pending.
+Every evidence receipt must name an existing in-scope file, carry its complete
+SHA-256 digest and provide a nonempty source locator. A missing file and an empty
+digest never count as matching evidence, including during update reuse.
 Archives retain the previous request, targets, decisions, matches, selection and
 the actual review guide/instructions used in that round, including prompt-only
 revisions that do not invalidate otherwise valid decisions.

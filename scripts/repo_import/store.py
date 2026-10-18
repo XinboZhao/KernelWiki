@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 from _yaml_compat import yaml
@@ -13,6 +14,14 @@ def digest(value):
 
 def file_hash(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
+def valid_receipt(path, receipt):
+    """Missing bytes and a missing digest must never count as matching evidence."""
+    checksum, locator = receipt.get('sha256'), receipt.get('locator')
+    return (isinstance(checksum, str) and re.fullmatch(r'[0-9a-f]{64}', checksum) is not None
+            and isinstance(locator, str) and bool(locator.strip())
+            and path.is_file() and file_hash(path) == checksum)
 
 
 def read(path, default=None):

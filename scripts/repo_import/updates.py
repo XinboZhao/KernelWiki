@@ -12,7 +12,7 @@ from pathlib import Path
 from .checkout import canonical_repo
 from .scan import EXTRACTOR_VERSION
 from .selection import validate_selection
-from .store import contained, digest, file_hash, read, write
+from .store import contained, digest, file_hash, read, write, valid_receipt
 
 
 def _identity(candidate):
@@ -151,8 +151,7 @@ def remap_review_candidate(verdict, id_map):
 
 def _receipts_valid(rows, checkout):
     try:
-        return all(receipt.get('locator') and
-                   file_hash(contained(checkout, receipt['path'])) == receipt['sha256']
+        return all(valid_receipt(contained(checkout, receipt['path']), receipt)
                    for row in rows for receipt in row.get('evidence', []))
     except (ValueError, KeyError, OSError):
         return False

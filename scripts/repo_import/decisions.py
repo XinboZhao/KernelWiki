@@ -1,6 +1,6 @@
 """Read externally authored decisions. No model execution or prompt loading."""
 from pathlib import Path
-from .store import digest, file_hash, contained, read
+from .store import digest, file_hash, contained, read, valid_receipt
 from .selection import review_matches, expand_members, representative_ids
 
 ACTIONS = {'create_page', 'extend_page', 'record_duplicate', 'attach_source', 'retain_page', 'merge_candidate'}
@@ -48,7 +48,7 @@ def validate_target_evidence(decision, root):
         if not (evidence['path'].startswith('wiki/') or evidence['path'].startswith('artifacts/')):
             raise ValueError('Target evidence must be existing wiki content or code assets')
         path = contained(root, evidence['path'])
-        if evidence.get('sha256') != file_hash(path) or not evidence.get('locator'):
+        if not valid_receipt(path, evidence):
             raise ValueError('Invalid target evidence receipt')
         if 'anchor' in evidence and (not isinstance(evidence['anchor'], str) or
                                      not evidence['anchor'].strip() or evidence['anchor'] not in path.read_text()):
@@ -138,7 +138,7 @@ def unresolved_overlaps(decision, hints, decisions, root, checkout, all_hints):
             raise ValueError('Overlap resolution must cite the matched evidence')
         for receipt in evidence:
             path = contained(checkout if hint['kind'] == 'batch' else root, receipt['path'])
-            if receipt.get('sha256') != file_hash(path) or not receipt.get('locator'):
+            if not valid_receipt(path, receipt):
                 raise ValueError('Invalid overlap evidence receipt')
         if hint['kind'] == 'batch':
             other = decisions.get(hint['candidate_id'], {})
@@ -225,7 +225,7 @@ def validate_decisions(document, request, root, checkout, *, _matches=None):
             raise ValueError('Decisions require source evidence')
         for evidence in decision['evidence']:
             path = contained(checkout, evidence['path'])
-            if evidence.get('sha256') != file_hash(path) or not evidence.get('locator'):
+            if not valid_receipt(path, evidence):
                 raise ValueError('Invalid evidence receipt')
         if decision['decision'] != 'include':
             continue
@@ -309,7 +309,7 @@ def validate_decisions(document, request, root, checkout, *, _matches=None):
             if receipt.get('basis') not in {'upstream-reported', 'locally-executed'}:
                 raise ValueError('Evidence must identify upstream-reported or locally-executed basis: ' + field)
             path = contained(checkout, receipt.get('path', ''))
-            if receipt.get('sha256') != file_hash(path) or not receipt.get('locator'):
+            if not valid_receipt(path, receipt):
                 raise ValueError('Missing content-bound reproducibility receipt: ' + field)
         if metadata['confidence'] == 'verified' and not decision.get('evidence_basis'):
             raise ValueError('Verified must satisfy existing evidence_basis requirements')

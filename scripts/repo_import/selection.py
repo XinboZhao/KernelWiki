@@ -8,7 +8,7 @@ import copy
 from collections import defaultdict
 from pathlib import Path
 
-from .store import contained, digest, file_hash, read, write, atomic_write
+from .store import contained, digest, file_hash, read, write, atomic_write, valid_receipt
 from .match import overlap_index
 
 KINDS = {'cuda_global', 'cute_kernel', 'triton_jit'}
@@ -80,8 +80,7 @@ def validate_selection(selection, inventory, checkout):
                    e.get('sha256') == source['fingerprints']['source_sha256'] for e in row['evidence']):
             raise ValueError('Selection must cite the member definition')
         for receipt in row['evidence']:
-            if (not receipt.get('locator') or
-                    file_hash(contained(checkout, receipt.get('path', ''))) != receipt.get('sha256')):
+            if not valid_receipt(contained(checkout, receipt.get('path', '')), receipt):
                 raise ValueError('Invalid selection evidence receipt')
         if row['role'] == 'helper' and not row.get('caller_basis'):
             raise ValueError('Helper exclusion requires caller/launch analysis')

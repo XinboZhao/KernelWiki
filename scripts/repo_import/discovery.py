@@ -2,7 +2,7 @@
 import copy
 from pathlib import Path
 
-from .store import contained, file_hash, read, write
+from .store import contained, file_hash, read, write, valid_receipt
 
 
 def load_discoveries(run):
@@ -79,7 +79,7 @@ def validate_discoveries(document, candidates, pages, root, checkout):
             for receipt in receipts:
                 if receipt not in expected:
                     raise ValueError('Discovered overlap must cite exact known definition/page/asset receipts and locators')
-                if file_hash(contained(base, receipt['path'])) != receipt['sha256']:
+                if not valid_receipt(contained(base, receipt['path']), receipt):
                     raise ValueError('Stale discovered overlap evidence hash')
 
 
