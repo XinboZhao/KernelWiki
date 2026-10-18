@@ -9,7 +9,7 @@ from .store import digest, file_hash, contained
 
 EXTENSIONS = CUDA_EXTENSIONS | {'.py'}
 EXTRACTOR_VERSION = 'repo-entries-v1'  # Stable encoding of individual entry receipts.
-SCAN_CONTRACT = 'repo-scan-v4'  # Also binds same-file CUDA qualifier aliases to real definitions.
+SCAN_CONTRACT = 'repo-scan-v5'  # Balanced CUDA signatures include braced default arguments.
 ENTRY_KINDS = {'cuda_global', 'cute_kernel', 'triton_jit'}
 
 

@@ -19,7 +19,11 @@ containing only CUDA qualifiers and known balanced launch attributes. Each alias
 use is bound to its actual named function and physical source line; declarations,
 prototypes and unrelated following structs are not kernels. It follows local
 redefinitions and `#undef`, and retains the declaration plus selected body as
-evidence. This is not a C++ preprocessor: external macro wrappers, computed names
+evidence. CUDA signatures balance complete parameter lists, including braced
+default values and nested constructors; neither can replace the entry name or
+truncate the selected source at an initializer. Conditional declarations retain
+all source branches without choosing a preprocessing configuration.
+This is not a C++ preprocessor: external macro wrappers, computed names
 and arbitrary template instantiations are not enumerated. Reviewers must record
 such coverage limitations rather than equating scan counts with complete runtime
 kernel coverage.

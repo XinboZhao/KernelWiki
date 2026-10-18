@@ -166,6 +166,50 @@ def cpp_parenthesis_end(masked, start, stop=None):
     return None
 
 
+def cuda_definition(masked, start, stop=None, *, single_name=False):
+    """Find a function body after balanced parameter/attribute sequences.
+
+    Braced default arguments belong to the parameter list, not to the body.
+    Skip complete parenthesized sequences so constructors in defaults cannot
+    replace the function name. Unknown launch-attribute macros before the actual
+    name remain supported for direct CUDA qualifiers; aliases stay conservative.
+    """
+    stop = len(masked) if stop is None else stop
+    cursor, names = start, []
+    attributes = {'__launch_bounds__', '__cluster_dims__', '__attribute__', '__declspec',
+                  'alignas', 'decltype', 'noexcept'}
+    while cursor < stop:
+        token = re.search(r'([A-Za-z_]\w*)\s*\(|[;{]', masked[cursor:stop])
+        if token is None:
+            break
+        position = cursor + token.start()
+        if token.group(1) is None:
+            if token.group() != '{' or not names or (single_name and len(names) != 1):
+                break
+            end = cpp_body_end(masked, position)
+            return (names[-1], position, end) if end is not None else None
+        end = cpp_parenthesis_end(masked, cursor + token.end() - 1, stop)
+        if end is None:
+            break
+        if token.group(1) not in attributes:
+            names.append(token.group(1))
+        cursor = end
+    if not single_name:
+        # Preserve existing lexical coverage of declarations whose #if arms
+        # repeat the opening function parenthesis. This does not choose an arm
+        # or preprocess source. Alias recognition must not use this fallback.
+        terminator = re.search(r'[;{]', masked[start:stop])
+        if terminator and terminator.group() == '{':
+            body_start = start + terminator.start()
+            header = masked[start:body_start]
+            if re.search(r'^\s*#\s*(?:if|ifdef|ifndef|elif|else|endif)\b', header, re.MULTILINE):
+                calls = re.findall(r'([A-Za-z_]\w*)\s*\(', header)
+                end = cpp_body_end(masked, body_start)
+                if calls and end is not None:
+                    return calls[-1], body_start, end
+    return None
+
+
 def cuda_prefix_macros(masked):
     """Recognize only same-file, first-name-parameter declaration prefixes.
 
@@ -281,34 +325,15 @@ def cuda_qualifier_macros(masked):
 
 def cuda_qualifier_invocations(masked, directives, aliases):
     """Bind a qualifier use to one named function, excluding attribute calls."""
-    attributes = {'__launch_bounds__', '__cluster_dims__', '__attribute__', '__declspec',
-                  'alignas', 'decltype', 'noexcept'}
     for macro, definition_start, definition_end, stop in aliases:
         for match in re.finditer(r'\b' + re.escape(macro) + r'\b', masked[definition_end:stop]):
             position = definition_end + match.start()
             if any(start <= position < end for start, end in directives):
                 continue
-            header_start = definition_end + match.end()
-            terminator = re.search(r'[;{]', masked[header_start:stop])
-            if terminator is None or terminator.group() != '{':
-                continue
-            body_start = header_start + terminator.start()
-            cursor, names = header_start, []
-            while cursor < body_start:
-                call = re.search(r'([A-Za-z_]\w*)\s*\(', masked[cursor:body_start])
-                if call is None:
-                    break
-                end = cpp_parenthesis_end(masked, cursor + call.end() - 1, body_start)
-                if end is None:
-                    break
-                if call.group(1) not in attributes:
-                    names.append(call.group(1))
-                cursor = end
-            if len(names) != 1:
-                continue
-            body_end = cpp_body_end(masked, body_start)
-            if body_end is not None:
-                yield names[0], position, body_start, body_end, definition_start, definition_end
+            result = cuda_definition(masked, definition_end + match.end(), stop, single_name=True)
+            if result is not None:
+                name, body_start, body_end = result
+                yield name, position, body_start, body_end, definition_start, definition_end
 
 
 def cuda_syntax(text):
@@ -338,19 +363,10 @@ def cuda_kernel_entries(text: str) -> list[KernelEntry]:
                        for name, position, body_start, body_end, _, _
                        in cuda_qualifier_invocations(masked, directives, aliases))
     for marker in CUDA_GLOBAL_MARKER.finditer(syntax_text):
-        terminator = re.search(r"[;{]", syntax_text[marker.end() :])
-        if not terminator or terminator.group() != "{":
-            continue
-        body_start = marker.end() + terminator.start()
-        calls = re.findall(
-            r"([A-Za-z_]\w*)\s*\(", syntax_text[marker.end() : body_start]
-        )
-        if not calls:
-            continue
-        body_end = cpp_body_end(syntax_text, body_start)
-        if body_end is None:
-            continue
-        definitions.append((calls[-1], marker.start(), body_start, body_end))
+        result = cuda_definition(syntax_text, marker.end())
+        if result is not None:
+            name, body_start, body_end = result
+            definitions.append((name, marker.start(), body_start, body_end))
     for name, position, body_start, body_end in sorted(definitions, key=lambda row: row[1]):
         body = text[body_start:body_end]
         body = re.sub(r"//.*?$|/\*.*?\*/", "", body, flags=re.MULTILINE | re.DOTALL)
@@ -410,11 +426,11 @@ def kernel_snippet(path: Path, name: str, line: int) -> str:
             return text[definition_start:definition_end] + '\n' + text[prefix_start:end] + '\n'
 
         match = CUDA_GLOBAL_MARKER.search(masked, offset)
-        if match is not None:
+        if match is not None and text[:match.start()].count('\n') + 1 == line:
             marker = match.start()
-            start = masked.find('{', marker)
-            end = cpp_body_end(masked, start)
-            if end is not None:
+            result = cuda_definition(masked, match.end())
+            if result is not None and result[0] == name:
+                _, _, end = result
                 prefix_start = offset
                 boundary = max(masked.rfind('}', 0, marker), masked.rfind(';', 0, marker))
                 template = masked.rfind('template', boundary + 1, marker)

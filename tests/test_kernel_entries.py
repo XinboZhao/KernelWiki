@@ -6,6 +6,58 @@ from kernel_entries import python_kernel_entries, cuda_kernel_entries
 
 
 class EntryTests(unittest.TestCase):
+    def test_cuda_braced_defaults_keep_real_name_and_body(self):
+        source = ('__global__ __launch_bounds__(128) void compute(Params p = Params(), '
+                  'Scale s = {}, int n = nested(1, call(2))) { use(p, s, n); }\n'
+                  '__global__ void prototype(Params p = Params{1});\n')
+        entries = cuda_kernel_entries(source)
+        self.assertEqual(['compute'], [e.name for e in entries])
+        changed = cuda_kernel_entries(source.replace('use(p, s, n)', 'use_new(p, s, n)'))
+        self.assertNotEqual(entries[0].body_sha256, changed[0].body_sha256)
+
+    def test_cuda_alias_braced_defaults_and_nested_constructors(self):
+        source = ('#define GPU_ENTRY __global__ __launch_bounds__(128)\n'
+                  'GPU_ENTRY void compute(Params p = Params{nested(1, 2)}) { use(p); }\n'
+                  'GPU_ENTRY void prototype(Params p = {});\n')
+        entries = cuda_kernel_entries(source)
+        self.assertEqual(['compute'], [e.name for e in entries])
+        self.assertEqual(2, entries[0].line)
+
+    def test_cuda_default_initializer_snippet_keeps_only_selected_complete_body(self):
+        from kernel_entries import kernel_snippet
+        source = ('template<typename Alpha>\n'
+                  '__global__ void compute(Alpha alpha = Alpha{1}) { use(alpha); }\n'
+                  '__global__ void unreviewed() { other(); }\n')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'kernel.cu'
+            path.write_text(source)
+            entry = cuda_kernel_entries(source)[0]
+            self.assertEqual(source[:source.index('__global__ void unreviewed')],
+                             kernel_snippet(path, entry.name, entry.line))
+            with self.assertRaises(ValueError):
+                kernel_snippet(path, 'wrong_name', entry.line)
+            with self.assertRaises(ValueError):
+                kernel_snippet(path, entry.name, 1)
+
+    def test_cuda_conditional_signatures_and_unknown_launch_macros_retain_coverage(self):
+        source = '''__global__ void
+#if defined(FAST)
+__launch_bounds__(512, 4) quantize(
+#else
+quantize(
+#endif
+int* x) { x[0] = 1; }
+__global__ CUSTOM_LAUNCH_BOUNDS(128) void sample(int* x) { x[0] = 2; }
+'''
+        entries = cuda_kernel_entries(source)
+        self.assertEqual(['quantize', 'sample'], [e.name for e in entries])
+        from kernel_entries import kernel_snippet
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'kernel.cu'
+            path.write_text(source)
+            self.assertEqual(source[:source.index('__global__ CUSTOM')],
+                             kernel_snippet(path, entries[0].name, entries[0].line))
+
     def test_python_multiple_entries_and_comment(self):
         entries = python_kernel_entries(CODE + '\n# @triton.jit\n@cute.kernel\ndef second(x):\n    return x\n')
         self.assertEqual(['reduce_kernel', 'second'], [e.name for e in entries])
