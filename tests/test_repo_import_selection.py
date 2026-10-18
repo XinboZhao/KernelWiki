@@ -2,12 +2,13 @@ import copy
 import tempfile
 import shutil
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from repo_import_support import (ROOT, make_repo, make_wiki, commit, read, write, digest,
                                  import_repo, admission, resolve_review)
 from repo_import.config import load_config
-from repo_import.selection import validate_selection, select_run, review_matches
+from repo_import.selection import validate_selection, select_run, review_matches, reuse_unchanged_reviews
 from repo_import.decisions import validate_decisions, rebind_manifest
 from repo_import.scan import scan_snapshot
 
@@ -264,6 +265,58 @@ class SelectionTests(unittest.TestCase):
             altered['decisions'].append(admission(request, index))
             with self.assertRaisesRegex(ValueError, 'split selection'):
                 validate_decisions(altered, request, wiki, Path(request['snapshot']['checkout']))
+
+    def test_multiple_unchanged_reviews_need_one_full_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wiki, run = self.prepare(Path(directory))
+            selection = self.confirmed(run)
+            for row in selection['entries']:
+                row['role'] = 'representative'
+                row.pop('representative', None)
+            write(run / 'selection.yaml', selection)
+            select_run(wiki, run, import_repo.prepare_review)
+            request = read(run / 'review-request.yaml')
+            document = {**read(run / 'decisions.yaml'), 'decisions': [
+                resolve_review(request, admission(request, i)) for i in range(len(request['candidates']))]}
+            validate_decisions(document, request, wiki, Path(request['snapshot']['checkout']))
+            write(run / 'decisions.yaml', document)
+            with patch('repo_import.decisions.validate_decisions', wraps=validate_decisions) as validate:
+                select_run(wiki, run, import_repo.prepare_review)
+            self.assertEqual(1, validate.call_count)
+            self.assertEqual(document['decisions'], read(run / 'decisions.yaml')['decisions'])
+
+    def test_invalid_old_review_does_not_discard_independent_valid_reviews(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wiki, run = self.prepare(Path(directory))
+            selection = self.confirmed(run)
+            for row in selection['entries']:
+                row['role'] = 'representative'
+                row.pop('representative', None)
+            write(run / 'selection.yaml', selection)
+            select_run(wiki, run, import_repo.prepare_review)
+            request = read(run / 'review-request.yaml')
+            template = read(run / 'decisions.yaml')
+            document = {**template, 'decisions': [resolve_review(request, admission(request, i))
+                                                 for i in range(len(request['candidates']))]}
+            for invalid_field in ('metadata', 'source_evidence', 'comparison'):
+                with self.subTest(invalid_field=invalid_field):
+                    altered = copy.deepcopy(document)
+                    decision = altered['decisions'][0]
+                    if invalid_field == 'metadata':
+                        decision['metadata'].pop('title')
+                    elif invalid_field == 'source_evidence':
+                        decision['evidence'][0]['sha256'] = 'stale'
+                    else:
+                        decision.pop('overlap_resolutions')
+                    write(run / 'decisions.yaml', template)
+                    reuse_unchanged_reviews(wiki, run, request, altered)
+                    refreshed = read(run / 'decisions.yaml')
+                    self.assertEqual('defer', refreshed['decisions'][0]['decision'])
+                    self.assertTrue(all(d['decision'] == 'include' for d in refreshed['decisions'][1:]))
+                    selected, pending = validate_decisions(refreshed, request, wiki,
+                                                           Path(request['snapshot']['checkout']))
+                    self.assertEqual(2, len(selected))
+                    self.assertEqual([decision['candidate_id']], pending)
 
     def test_real_validation_publication_and_selection_change_blocks_apply(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -90,6 +90,11 @@ relations replace pairwise comparisons; suggestions cannot bypass review.
 A reviewer can split/merge groups or change representatives at any time before
 publication. Rerun `select`; old review files are archived. Unchanged groups may
 reuse still-valid decisions; changed groups and comparisons need renewed review.
+Unchanged decisions are revalidated together, including source receipts and
+cross-candidate relationships, so a large completed review does not require a
+full validation per decision. If an old record is invalid or conflicts with
+another target, independent valid records can still be reused; unresolved
+records remain pending.
 Archives retain the previous request, targets, decisions, matches, selection and
 the actual review guide/instructions used in that round, including prompt-only
 revisions that do not invalidate otherwise valid decisions.

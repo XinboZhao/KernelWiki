@@ -221,23 +221,59 @@ def reuse_unchanged_reviews(root, run, old, old_document):
     from .decisions import validate_decisions
     request = read(run / 'review-request.yaml')
     document = read(run / 'decisions.yaml')
-    def group(selection, identity):
-        return [r for r in selection.get('entries', []) if r['candidate_id'] == identity or
-                (r['role'] == 'member' and r.get('representative') == identity)]
+    def groups(selection):
+        result = defaultdict(list)
+        for row in selection.get('entries', []):
+            owner = row['representative'] if row['role'] == 'member' else row['candidate_id']
+            result[owner].append(row)
+        return result
+
+    old_groups, current_groups = groups(old.get('selection', {})), groups(request['selection'])
     previous = {d['candidate_id']: d for d in old_document.get('decisions', [])}
     matches = None
+    reusable = []
     for i, template in enumerate(document['decisions']):
         identity = template['candidate_id']
         verdict = previous.get(identity)
         if (verdict is None or verdict.get('decision') == 'defer' or
-                group(old.get('selection', {}), identity) != group(request['selection'], identity)):
+                old_groups[identity] != current_groups[identity]):
             continue
         if matches is None:
             matches = review_matches(request)
+        if verdict.get('decision') == 'include' and (
+                {r.get('match_id') for r in verdict.get('overlap_resolutions', [])} !=
+                {h['match_id'] for h in matches[identity]}):
+            continue  # New or removed comparisons require a renewed decision.
+        reusable.append((i, verdict))
+
+    if not reusable:
+        return
+    checkout = Path(request['snapshot']['checkout'])
+    # The common case is a valid set of unchanged reviews. Validate it together
+    # once, including member expansion and reciprocal/page-target relationships.
+    # Revalidating the growing full document per verdict repeatedly hashes the
+    # same sources and makes selection refresh quadratic in completed reviews.
+    trial = copy.deepcopy(document)
+    for i, verdict in reusable:
+        trial['decisions'][i] = verdict
+    try:
+        _, pending = validate_decisions(trial, request, root, checkout, _matches=matches)
+    except (ValueError, OSError, KeyError):
+        pass
+    else:
+        if not {verdict['candidate_id'] for _, verdict in reusable} & set(pending):
+            write(run / 'decisions.yaml', trial)
+            return
+
+    # Preserve independent valid reviews when one old record is malformed or
+    # conflicts with another target. Every accepted trial still passes the full
+    # validator; the batch path never weakens validation or evidence checks.
+    for i, verdict in reusable:
+        identity = verdict['candidate_id']
         trial = copy.deepcopy(document)
         trial['decisions'][i] = verdict
         try:
-            selected, pending = validate_decisions(trial, request, root, Path(request['snapshot']['checkout']),
+            selected, pending = validate_decisions(trial, request, root, checkout,
                                                   _matches=matches)
         except (ValueError, OSError, KeyError):
             continue
