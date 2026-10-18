@@ -80,6 +80,7 @@ def shared_existing_page(group, hints, pages):
 
 
 def reuse_record(candidate, previous, request, hints):
+    from copy import deepcopy
     if previous.get('action') not in {'retain_page', 'attach_source', 'merge_candidate'}:
         return None
     for identity, item in request['registry']['implementations'].items():
@@ -99,6 +100,12 @@ def reuse_record(candidate, previous, request, hints):
             receipt = item['versions'][item['current_version']].get('page_evidence', {})
             if receipt.get('path') != page['path'] or receipt.get('sha256') != page['sha256']:
                 continue
+        source_matches = {hint['match_id'] for hint in hints
+                          if hint['kind'] in {'pr', 'kernel'} and hint.get('page_id') != item['page_id']}
+        source_comparisons = [deepcopy(resolution) for resolution in previous.get('overlap_resolutions', [])
+                              if resolution['match_id'] in source_matches and
+                              resolution.get('outcome') == 'same_implementation' and
+                              resolution.get('representative') == item['page_id']]
         return {**previous, 'candidate_id': candidate['candidate_id'],
                 'action': 'record_duplicate' if previous['relation'] == 'exact_duplicate' else 'retain_page',
                 'target_implementation_id': identity, 'target_page_id': item['page_id'],
@@ -113,8 +120,36 @@ def reuse_record(candidate, previous, request, hints):
                      'representative': item['page_id'], 'evidence': [hint['evidence']],
                      'rationale': 'Unchanged reviewed relationship; retain the same representative.'}
                     for hint in hints if hint.get('page_id') == item['page_id'] and hint['kind'] in {'registry', 'kernel'}]
-                    + reuse_distinct_comparisons(previous, hints)}
+                    + source_comparisons + reuse_distinct_comparisons(previous, hints)}
     return None
+
+
+def shared_pr_canonical_page(decision, hint, hints, resolutions, root):
+    """Keep one attribution when two existing pages cover the same reviewed PR branch."""
+    target = decision.get('target_page_id')
+    if (hint['kind'] != 'kernel' or hint.get('page_id') == target or
+            decision.get('action') not in {'retain_page', 'attach_source', 'record_duplicate'} or
+            not decision.get('equivalence_basis')):
+        return False
+    canonical = next((h for h in hints if h['kind'] in {'kernel', 'registry'} and h.get('page_id') == target), None)
+    chosen = resolutions.get(canonical['match_id'], {}) if canonical else {}
+    other = resolutions.get(hint['match_id'], {})
+    if any(r.get('outcome') != 'same_implementation' or r.get('representative') != target
+           for r in (chosen, other)):
+        return False
+    for pr in hints:
+        review = resolutions.get(pr['match_id'], {})
+        if (pr['kind'] != 'pr' or not {target, hint['page_id']} <= set(pr.get('kernel_pages', [])) or
+                review.get('outcome') != 'same_implementation' or review.get('representative') != target):
+            continue
+        evidence = decision.get('target_evidence', [])
+        if all(any(e.get('path') == page['evidence']['path'] and
+                   e.get('sha256') == page['evidence']['sha256'] and
+                   isinstance(e.get('anchor'), str) and pr['page_id'] in e['anchor']
+                   for e in evidence) for page in (canonical, hint)):
+            validate_target_evidence(decision, root)
+            return True
+    return False
 
 
 def unresolved_overlaps(decision, hints, decisions, root, checkout, all_hints):
@@ -180,6 +215,8 @@ def unresolved_overlaps(decision, hints, decisions, root, checkout, all_hints):
             elif decision.get('action') == 'create_page' and representative != decision['candidate_id']:
                 blocked = True
         else:
+            if shared_pr_canonical_page(decision, hint, hints, resolutions, root):
+                continue
             if decision.get('target_page_id') != hint['page_id'] or decision.get('action') == 'create_page':
                 blocked = True
             expected_representative = decision['candidate_id'] if decision.get('action') == 'extend_page' else hint['page_id']

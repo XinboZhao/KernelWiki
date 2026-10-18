@@ -221,6 +221,13 @@ Otherwise the group remains pending. This preserves one page/registry record and
 separate source relationships; it does not merge different execution graphs or
 allow ordinary versions to bypass representative selection.
 
+When the same reviewed PR implementation is cited by several existing kernel
+pages, explicitly select one canonical existing page. Review the PR and all
+equivalent page hints as `same_implementation`, with that page as representative,
+and cite literal shared-PR anchors in content-bound `target_evidence` for each
+page. `retain_page` or `attach_source` records one attribution and preserves the
+other pages. A shared PR reference does not automatically merge implementations.
+
 The runtime registry stores one full representative version per implementation.
 Other versions/variants retain compact origin, digest, relationship and reason
 records; full scan and review history remains in persistent run storage. The

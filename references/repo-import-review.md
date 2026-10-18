@@ -353,6 +353,17 @@ Missing scopes or comparisons keep the group pending. This does not turn duplica
 implementations into separate branches: equivalent versions still select one
 representative. Publication preserves one existing page and one registry record,
 with separate compact source relationships and their scoped receipts.
+If several existing kernel pages cite the same implementation in one PR, choose
+one canonical page through `retain_page` or `attach_source`. Resolve the common
+PR and each equivalent page as `same_implementation`, naming that canonical
+page as representative. `target_evidence` must include content-bound receipts
+for both the canonical and other pages, with literal `anchor` text containing
+the shared PR ID; explain the exact source correspondence in `equivalence_basis`.
+Both pages must be linked by the reviewed PR hint. Shared citations alone never
+decide equivalence, and unrelated implementations in that PR still need separate
+comparisons. Only the chosen page receives the incoming attribution; the other
+page is preserved. This does not merge or rewrite existing wiki pages.
+
 Saved existing-page attribution is reusable only while its registered page receipt
 matches the current page. An external page edit requires fresh review even when
 the same anchor text survives. Importer-owned attribution updates renew that
