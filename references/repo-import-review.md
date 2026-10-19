@@ -138,7 +138,7 @@ existing kernel/PR pages and code evidence included in the context.
 Repository membership alone is context, not implementation-overlap evidence.
 Prepared PR hints use matching source paths (including historical directories),
 code receipts or meaningful normalized names. Generic module names such as
-`_cute.py`, `_kernels.py` and `_utils.py` are not name-based overlap evidence,
+`_cute.py`, `_kernels.py`, `_utils.py` and `default.cu` are not name-based overlap evidence,
 including when unrelated modules both export `kernel` or `main`. Exact source
 paths (including retained `key-files` paths), source/body hashes and explicit
 discoveries still produce hints. A canonical page citing the repo

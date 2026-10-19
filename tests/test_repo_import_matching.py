@@ -9,7 +9,7 @@ from repo_import.match import find_matches, overlap_index
 class MatchTests(unittest.TestCase):
     def test_generic_module_names_do_not_imply_overlap(self):
         empty = {'implementations': {}}
-        for filename in ('_cute.py', '_kernels.py', '_utils.py', 'kernel.py', 'main.py'):
+        for filename in ('_cute.py', '_kernels.py', '_utils.py', 'kernel.py', 'main.py', 'default.cu'):
             with self.subTest(filename=filename):
                 candidate = {'candidate_id': 'a', 'origin': {'repo': 'https://github.com/owner/project'},
                              'path': 'first/' + filename, 'entry': 'kernel', 'line': 1,
@@ -19,12 +19,14 @@ class MatchTests(unittest.TestCase):
                 other['fingerprints'] = {'source_sha256': 'source-b', 'entry_sha256': 'body-b'}
                 page = {'page_id': 'pr-project-1', 'path': 'sources/prs/project/PR-1.md',
                         'sha256': 'page', 'kind': 'pr', 'repo': 'owner/project',
-                        'title': 'Optimize CuTe kernels and utils in main kernel', 'sources': [],
+                        'title': 'Optimize CuTe kernels and utils in main default kernel', 'sources': [],
                         'changed_paths': ['second/' + filename],
                         'code_assets': [{'path': 'artifacts/prs/project/1/key-files/second/' + filename,
                                          'sha256': 'source-b', 'entries': [{'body_sha256': 'body-b'}]}]}
                 self.assertEqual({'a': [], 'b': []}, overlap_index([candidate, other], empty, []))
                 self.assertEqual([], overlap_index([candidate], empty, [page])['a'])
+                title_only = {**page, 'changed_paths': ['unrelated/gemm.cu'], 'code_assets': []}
+                self.assertEqual([], overlap_index([candidate], empty, [title_only])['a'])
                 for reason in ('exact_path', 'exact_asset_path', 'exact_body', 'exact_source'):
                     related = copy.deepcopy(page)
                     if reason == 'exact_path': related['changed_paths'] = [candidate['path']]

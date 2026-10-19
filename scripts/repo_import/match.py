@@ -59,7 +59,7 @@ def repo_name(repo):
 
 def meaningful_source_stem(path):
     stem = re.sub(r'[^a-z0-9]+', ' ', Path(path).stem.lower()).strip()
-    return stem not in {'kernel', 'kernels', 'utils', 'main', 'input', 'cute'}
+    return stem not in {'kernel', 'kernels', 'utils', 'main', 'input', 'cute', 'default'}
 
 
 def find_matches(candidate, registered):
