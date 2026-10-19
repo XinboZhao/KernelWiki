@@ -7,6 +7,38 @@ from repo_import.match import find_matches, overlap_index
 
 
 class MatchTests(unittest.TestCase):
+    def test_generic_module_names_do_not_imply_overlap(self):
+        empty = {'implementations': {}}
+        for filename in ('_cute.py', '_kernels.py', '_utils.py', 'kernel.py', 'main.py'):
+            with self.subTest(filename=filename):
+                candidate = {'candidate_id': 'a', 'origin': {'repo': 'https://github.com/owner/project'},
+                             'path': 'first/' + filename, 'entry': 'kernel', 'line': 1,
+                             'fingerprints': {'source_sha256': 'source-a', 'entry_sha256': 'body-a'}}
+                other = copy.deepcopy(candidate)
+                other.update(candidate_id='b', path='second/' + filename)
+                other['fingerprints'] = {'source_sha256': 'source-b', 'entry_sha256': 'body-b'}
+                page = {'page_id': 'pr-project-1', 'path': 'sources/prs/project/PR-1.md',
+                        'sha256': 'page', 'kind': 'pr', 'repo': 'owner/project',
+                        'title': 'Optimize CuTe kernels and utils in main kernel', 'sources': [],
+                        'changed_paths': ['second/' + filename],
+                        'code_assets': [{'path': 'artifacts/prs/project/1/key-files/second/' + filename,
+                                         'sha256': 'source-b', 'entries': [{'body_sha256': 'body-b'}]}]}
+                self.assertEqual({'a': [], 'b': []}, overlap_index([candidate, other], empty, []))
+                self.assertEqual([], overlap_index([candidate], empty, [page])['a'])
+                for reason in ('exact_path', 'exact_asset_path', 'exact_body', 'exact_source'):
+                    related = copy.deepcopy(page)
+                    if reason == 'exact_path': related['changed_paths'] = [candidate['path']]
+                    if reason == 'exact_asset_path':
+                        related['code_assets'][0]['path'] = 'artifacts/prs/project/1/key-files/' + candidate['path']
+                    if reason == 'exact_body': related['code_assets'][0]['entries'][0]['body_sha256'] = 'body-a'
+                    if reason == 'exact_source': related['code_assets'][0]['sha256'] = 'source-a'
+                    self.assertEqual(1, len(overlap_index([candidate], empty, [related])['a']), reason)
+                for reason in ('exact_path', 'exact_body'):
+                    related = copy.deepcopy(other)
+                    if reason == 'exact_path': related['path'] = candidate['path']
+                    if reason == 'exact_body': related['fingerprints']['entry_sha256'] = 'body-a'
+                    self.assertEqual(1, len(overlap_index([candidate, related], empty, [])['a']), reason)
+
     def test_same_snapshot_and_dependency_difference(self):
         with tempfile.TemporaryDirectory() as directory:
             _, _, _, request = prepared(Path(directory))

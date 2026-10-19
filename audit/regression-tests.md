@@ -346,3 +346,10 @@ The corrected complete gate passed all 304 tests (236.440s). Baseline validation
 Shared PR attribution update (2026-10-18): discovery includes 310 tests. Six new regressions cover a shared implementation cited by two existing pages, explicit canonical/source anchors, complete PR/page review, invalid anchors, unchanged registered attribution reuse and fresh review after an external page change. The gate preserves one import target and existing page prose; shared PR references alone do not establish equivalence. Real corpus publication remains disabled during acceptance.
 
 The complete shared-PR attribution gate passed all 310 tests (233.770s). Baseline validation and offline freshness passed. The real source-reviewed FC1 port resolves to one existing canonical page with explicit evidence for both previously citing pages; acceptance generated decisions and reports only, without publishing corpus changes.
+
+Generic module overlap update (2026-10-19): discovery includes 311 tests. The new
+regression rejects title/basename hints for generic module names with leading
+underscores, while preserving exact paths, retained upstream paths, source/body
+hashes and same-file batch hints. All 311 tests passed (306.008s); baseline
+validation and offline freshness passed. Real audit materials remain ignored,
+and no corpus content was published.

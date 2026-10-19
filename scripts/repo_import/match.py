@@ -57,6 +57,11 @@ def repo_name(repo):
     return canonical_repo(repo).rstrip('/').split('/')[-1].lower()
 
 
+def meaningful_source_stem(path):
+    stem = re.sub(r'[^a-z0-9]+', ' ', Path(path).stem.lower()).strip()
+    return stem not in {'kernel', 'kernels', 'utils', 'main', 'input', 'cute'}
+
+
 def find_matches(candidate, registered):
     matches = []
     for identity, implementation in registered.get('implementations', {}).items():
@@ -101,7 +106,8 @@ def overlap_index(candidates, registered, pages, owners=None, discoveries=None):
         base = tuning_base(name)
         keys = [('body', c['fingerprints']['entry_sha256']), ('file', c['path'])]
         if name in {'kernel', 'main'}:
-            keys.append(('generic_entry_file', (name, Path(c['path']).name)))
+            if meaningful_source_stem(c['path']):
+                keys.append(('generic_entry_file', (name, Path(c['path']).name)))
         else:
             keys.append(('entry', name))
         if base not in {'kernel', 'main'} or base != name:
@@ -117,6 +123,7 @@ def overlap_index(candidates, registered, pages, owners=None, discoveries=None):
                 append(candidate, {**match, 'kind': 'registry', 'evidence': {
                     'path': page['path'], 'sha256': page['sha256'], 'locator': page['page_id']}})
         stem = Path(candidate['path']).stem.lower()
+        meaningful_stem = meaningful_source_stem(candidate['path'])
         for page in pages:
             if page['page_id'] in registered_pages and (any(hint.get('page_id') == page['page_id'] for hint in result[candidate['candidate_id']]) or
                     any(item['page_id'] == page['page_id'] and item.get('managed', True) for item in registered['implementations'].values())):
@@ -125,9 +132,10 @@ def overlap_index(candidates, registered, pages, owners=None, discoveries=None):
             matching = [asset for asset in page['code_assets'] if
                         asset['sha256'] == candidate['fingerprints']['source_sha256'] or
                         any(entry['body_sha256'] == candidate['fingerprints']['entry_sha256'] for entry in asset['entries']) or
-                        (same_repo and Path(asset['path']).name == Path(candidate['path']).name)]
+                        (same_repo and (asset['path'] == candidate['path'] or
+                         asset['path'].partition('/key-files/')[2] == candidate['path'] or
+                         (meaningful_stem and Path(asset['path']).name == Path(candidate['path']).name)))]
             name = repo_name(candidate['origin']['repo'])
-            meaningful_stem = stem not in {'kernel', 'kernels', 'utils', 'main', 'input'}
             normalized_stem = re.sub(r'[^a-z0-9]+', ' ', stem).strip()
             normalized_title = re.sub(r'[^a-z0-9]+', ' ', page['title'].lower()).strip()
             title_hint = meaningful_stem and normalized_stem in normalized_title
@@ -184,7 +192,8 @@ def overlap_index(candidates, registered, pages, owners=None, discoveries=None):
                 continue
             same_body = other['fingerprints']['entry_sha256'] == candidate['fingerprints']['entry_sha256']
             same_entry = (other['entry'] == candidate['entry'] and
-                          (Path(other['path']).name == Path(candidate['path']).name or other['entry'] not in {'kernel', 'main'}))
+                          ((meaningful_stem and Path(other['path']).name == Path(candidate['path']).name) or
+                           other['entry'] not in {'kernel', 'main'}))
             same_file = other['path'] == candidate['path']
             base, other_base = tuning_base(candidate['entry']), tuning_base(other['entry'])
             tuned_name = base == other_base and (base not in {'kernel', 'main'} or
