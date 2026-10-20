@@ -135,6 +135,17 @@ existing kernel/PR pages and code evidence included in the context.
    Preserve original agent input/output under `review-attachments/` when
    available. No prompt-version change alone invalidates saved admission.
 
+For historical PR attribution, distinguish a pinned source snapshot from the
+implementation actually changed by the PR. In a shallow clone, `git show` may
+treat a boundary commit as a root and display existing files as entirely added.
+Read the real first parent from the raw commit (`git cat-file -p`) and compare
+the explicit parent and commit trees, or inspect a retained upstream patch.
+Check the relevant function's actual changes; an unchanged neighboring function
+does not establish that the PR introduced or modified that implementation.
+Record missing parent trees, blobs or patches as provenance gaps, preserving
+the source analysis already completed. Do not replace missing evidence with a
+synthetic root diff, or describe available material not yet reviewed as missing.
+
 Repository membership alone is context, not implementation-overlap evidence.
 Prepared PR hints use matching source paths (including historical directories),
 code receipts or meaningful normalized names. Generic module names such as
