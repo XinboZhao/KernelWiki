@@ -305,6 +305,47 @@ policy requires renewed review even when kernel text did not change.
 
 ## Examples and presets
 
+### Read-only review archives
+
+`scripts/archive_repo_reviews.py export --batch <accepted-batch> --out
+examples/repo-import/reviews/<batch>` packages an accepted multi-repository
+review without building or applying an import. Optional repeated
+`--public-source-catalog <saved-catalog>` arguments resolve historical source
+receipts using recorded public Git origins or pinned public package members.
+The exporter never fetches sources or calls a model. It verifies the accepted
+decision/list bindings before relocating paths and refuses an existing output.
+
+The archive separates inventory, selection, representative decisions, matching
+inputs, effective lists, prompts and directly cited documentary evidence. Equal
+dependency records use lossless standard YAML anchors. Original capture hashes
+are recorded separately from normalized archive file hashes: relocating a path
+changes document bytes and semantic digests. A snapshot of Wiki matching context
+is retained; no active registry is populated.
+
+`python3 scripts/archive_repo_reviews.py pack --archive <directory> --out
+<new-directory>` creates a deterministic, lossless `records.tar.gz` and its
+checksum manifest, retaining the input. The shipped complete batch uses this
+format to keep the working tree small; compressed bytes remain subject to the
+repository size budget. The verifier extracts into temporary storage, rejects
+links, duplicate entries and paths escaping the archive, and checks both the
+package hash and all inner records. Standard `tar -xzf` can extract a copy into
+ignored storage for reading.
+
+`python3 scripts/archive_repo_reviews.py verify --archive <directory>` checks
+file hashes, candidate coverage, effective-group membership, unchanged metadata,
+portable evidence bindings, and both stages of unresolved entries offline.
+`archive_only: true` decisions are rejected by preset rebinding. The archive
+contains no ready-to-apply decision manifest. Prepare the pinned source again,
+recheck current matches and evidence, and validate before any future publication.
+
+Raw iterative agent transcripts remain in the configured persistent run history.
+`history://` references navigate that history; they are not admission evidence.
+Public implementation bytes remain upstream, addressed by fixed Git commit or
+package hash/member and their own source hash. Documentary diff excerpts can be
+included, with original and normalized evidence hashes distinguished explicitly.
+
+### Decision excerpts and optional presets
+
 [Public review examples](../examples/repo-import/README.md) include Quack and
 FlashMLA decisions and explanations without publication outputs. Adapt them to
 fresh materials rather than blindly copying stale context or IDs.

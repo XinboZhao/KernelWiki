@@ -2,7 +2,8 @@
 
 These are external review materials, not imported wiki contents. They do not
 create pages, populate a registry, enable a preset, or appear in kernel queries.
-No source implementation is embedded in the examples. Each example pins a public
+The examples reference upstream implementation files by pinned provenance.
+Documentary evidence can include public source diffs. Each example pins a public
 repository commit and records candidate fingerprints, evidence and a decision.
 
 - `quack-softmax-review.yaml`: review selects Softmax backward as an independent
@@ -22,6 +23,25 @@ A build may publish a reviewed subset while keeping unresolved candidates
 pending. Actual publication generates kernel/source pages, selected-version
 registry records and indices only in the explicitly chosen target wiki. The
 feature itself ships none of those import outputs.
+
+## Complete read-only review batch
+
+[The 14-repository review archive](reviews/2026-10-16/README.md) keeps separate
+scan inventories, confirmed selection, detailed verdicts and validated effective
+lists. It also retains the prompts used and directly cited documentary evidence,
+which may contain public diff excerpts. It preserves both detailed-review defers
+and initial-selection pending entries. These records are review results, not
+published Wiki pages or an enabled import preset.
+
+Verify the archive offline from the repository root:
+
+```bash
+python3 scripts/archive_repo_reviews.py verify --archive examples/repo-import/reviews/2026-10-16
+```
+
+The verifier checks archive integrity and status preservation. It does not rerun
+source review or execute kernels. Reusing a decision requires fresh preparation
+and validation against the chosen source and current Wiki context.
 
 ## Adapting examples to selection
 

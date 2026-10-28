@@ -353,3 +353,18 @@ underscores, while preserving exact paths, retained upstream paths, source/body
 hashes and same-file batch hints. All 311 tests passed (306.008s); baseline
 validation and offline freshness passed. Real audit materials remain ignored,
 and no corpus content was published.
+
+
+Portable review archive update (2026-10-28): discovery includes 319 tests. Eight
+new archive regressions cover cache-independent relocation, lossless YAML and
+compression, read-only preset rejection, unchanged holds and confidence,
+source/evidence receipt tampering, output isolation, and unsafe compressed paths
+or links. The eight focused checks pass with both installed PyYAML and the
+bundled fallback. Independent relocation of the real compressed batch verifies
+all 14 repositories, 1,980 effective groups, 177 detailed-review defers and 34
+initial-selection pending entries. Wiki validation (1,041 files, 37 asset bundles,
+14 ledgers), offline freshness and the 40 MiB size gate pass; the working tree
+is 36.41 MiB including the complete 11.84 MiB compressed review records. Original
+run history is unchanged. No real Wiki corpus publication occurred.
+
+Final complete discovery gate: all 319 tests passed (217.753s), including the two real-validator publication tests in isolated fixtures. Archive relocation, baseline validation, offline freshness and the size gate also pass. No real Wiki corpus or active import registry was changed.

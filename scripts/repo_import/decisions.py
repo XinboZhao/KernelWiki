@@ -378,6 +378,8 @@ def validate_decisions(document, request, root, checkout, *, _matches=None):
 
 def rebind_manifest(manifest, request):
     """Reuse content-bound records only against exactly the saved wiki context."""
+    if manifest.get('archive_only'):
+        raise ValueError('Read-only review archives are not import presets; prepare and validate current materials first')
     rebind_candidates = request['candidates']
     if 'selection' in request:
         if 'selection' not in manifest:
