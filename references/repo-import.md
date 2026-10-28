@@ -303,6 +303,15 @@ content-bound evidence, and the importer performs no GPU validation. Scope/schem
 policy receipts are bound separately from prompt wording; changing applicable
 policy requires renewed review even when kernel text did not change.
 
+Publication records a hash of the final canonical page in the registry. On a
+repeat import, a former batch peer may now appear as a registry match. Its
+distinctness decision is reusable only when both source bindings still match,
+both original directions explicitly resolved the batch comparison as distinct,
+and the published target page still matches that recorded hash. A missing
+receipt, changed source/page or new comparison remains pending. Previously
+reviewed distinct PR/page matches also retain their verdict only when the match
+ID and all cited evidence receipts remain valid.
+
 ## Examples and presets
 
 ### Read-only review archives

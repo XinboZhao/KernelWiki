@@ -33,12 +33,59 @@ def decision_key(candidate):
     return candidate['content_digest']
 
 
-def reuse_distinct_comparisons(previous, hints):
+def reuse_distinct_comparisons(previous, hints, request=None):
     """An unchanged match ID binds both candidate snapshots and the target receipt."""
     from copy import deepcopy
-    current_batch = {hint['match_id'] for hint in hints if hint['kind'] == 'batch'}
-    return [deepcopy(resolution) for resolution in previous.get('overlap_resolutions', [])
-            if resolution['match_id'] in current_batch and resolution.get('outcome') == 'distinct']
+    current_matches = {hint['match_id'] for hint in hints}
+    retained = [deepcopy(resolution) for resolution in previous.get('overlap_resolutions', [])
+                if resolution['match_id'] in current_matches and resolution.get('outcome') == 'distinct']
+    if request is None:
+        return retained
+    # A reviewed batch peer becomes a registry match after publication. Reuse
+    # that distinction only with both unchanged sources, reciprocal verdicts,
+    # and an unchanged, importer-recorded target page receipt.
+    candidates = {c['candidate_id']: c for c in request['candidates']}
+    source = candidates.get(previous.get('candidate_id'))
+    if not source or source['content_digest'] != previous.get('content_digest'):
+        return retained
+    pages = {page['page_id']: page for page in request['existing_pages']}
+    batch = {hint['candidate_id']: hint for hint in hints if hint['kind'] == 'batch'}
+    prior = {row['match_id']: row for row in retained}
+    all_hints = request.get('matches')
+    if all_hints is None:
+        all_hints = review_matches(request)
+    for hint in hints:
+        if hint['kind'] != 'registry' or hint['match_id'] in prior:
+            continue
+        item = request['registry']['implementations'].get(hint['implementation_id'], {})
+        page = pages.get(item.get('page_id'), {})
+        receipt = item.get('page_receipt', {})
+        if (not page or receipt.get('path') != page['path'] or
+                receipt.get('sha256') != page['sha256']):
+            continue
+        version = item.get('versions', {}).get(hint['version_id'], {})
+        target = version.get('candidate', {})
+        current = candidates.get(target.get('candidate_id'))
+        if (not current or target['content_digest'] != current['content_digest'] or
+                target['origin']['repo_id'] != current['origin']['repo_id']):
+            continue
+        peer = batch.get(current['candidate_id'], {})
+        resolution = prior.get(peer.get('match_id'))
+        reciprocal = {row['match_id'] for row in all_hints.get(current['candidate_id'], [])
+                      if row['kind'] == 'batch' and row['candidate_id'] == source['candidate_id']}
+        other = version.get('decision', {})
+        if (not resolution or other.get('decision') != 'include' or
+                other.get('content_digest') != current['content_digest'] or
+                not any(row['match_id'] in reciprocal and row.get('outcome') == 'distinct'
+                        for row in other.get('overlap_resolutions', []))):
+            continue
+        retained.append({'match_id': hint['match_id'], 'outcome': 'distinct',
+            'rationale': 'Reuse the reciprocal source-reviewed batch distinction; both source '
+                         'bindings and the published target page receipt are unchanged. '
+                         + resolution['rationale'],
+            'evidence': [deepcopy(hint['evidence'])],
+            'prior_batch_match_id': peer['match_id']})
+    return retained
 
 
 def validate_target_evidence(decision, root):
@@ -120,7 +167,7 @@ def reuse_record(candidate, previous, request, hints):
                      'representative': item['page_id'], 'evidence': [hint['evidence']],
                      'rationale': 'Unchanged reviewed relationship; retain the same representative.'}
                     for hint in hints if hint.get('page_id') == item['page_id'] and hint['kind'] in {'registry', 'kernel'}]
-                    + source_comparisons + reuse_distinct_comparisons(previous, hints)}
+                    + source_comparisons + reuse_distinct_comparisons(previous, hints, request)}
     return None
 
 
@@ -211,7 +258,19 @@ def unresolved_overlaps(decision, hints, decisions, root, checkout, all_hints):
                     if representative != decision['candidate_id'] or not set(linked) <= distinct_pages:
                         blocked = True
                 elif decision.get('target_page_id') not in linked:
-                    blocked = True
+                    # A PR can contain another implementation branch. An already
+                    # reviewed canonical target need not cite that PR before this
+                    # import adds the newly established attribution.
+                    target = decision.get('target_page_id')
+                    target_reviewed = any(
+                        h['kind'] in {'kernel', 'registry'} and h.get('page_id') == target and
+                        resolutions.get(h['match_id'], {}).get('outcome') == 'same_implementation' and
+                        resolutions[h['match_id']].get('representative') == target for h in hints)
+                    distinct_pages = {h['page_id'] for h in hints if h['kind'] in {'kernel', 'registry'}
+                                      and resolutions.get(h['match_id'], {}).get('outcome') == 'distinct'}
+                    if (decision.get('action') not in {'retain_page', 'attach_source', 'record_duplicate'} or
+                            not target_reviewed or not set(linked) <= distinct_pages):
+                        blocked = True
             elif decision.get('action') == 'create_page' and representative != decision['candidate_id']:
                 blocked = True
         else:
@@ -416,7 +475,7 @@ def rebind_manifest(manifest, request):
                                             'rationale': 'Retain the previously admitted unchanged representative.'}
                                            for hint in hints[candidate['candidate_id']]
                                            if hint['kind'] == 'registry' and hint['implementation_id'] == identity]
-                                       + reuse_distinct_comparisons(version['decision'], hints[candidate['candidate_id']])})
+                                       + reuse_distinct_comparisons(version['decision'], hints[candidate['candidate_id']], request)})
                         break
             if not any(row['candidate_id'] == candidate['candidate_id'] for row in reused):
                 retained = reuse_record(candidate, includes.get(candidate['content_digest'], {}), request, hints[candidate['candidate_id']])

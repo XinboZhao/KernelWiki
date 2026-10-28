@@ -276,3 +276,44 @@ is 36.41 MiB including the complete 11.84 MiB compressed review records. Origina
 run history is unchanged. No real Wiki corpus publication occurred.
 
 Final complete discovery gate: all 319 tests passed (217.753s), including the two real-validator publication tests in isolated fixtures. Archive relocation, baseline validation, offline freshness and the size gate also pass. No real Wiki corpus or active import registry was changed.
+
+
+Repeated real-repository acceptance update (2026-10-28): discovery includes 325 tests.
+Five new regressions cover reciprocal batch distinctions becoming registry
+matches after publication, unchanged-page receipts, changed source/page rejection,
+absent prior comparisons, and unchanged versus edited existing-page evidence.
+All five focused tests pass. See the final acceptance receipt below.
+
+The initial real pinned Quack acceptance in an isolated Wiki produced 23 canonical pages from 23 representatives and one variant
+member, excluding one helper. Same-run apply was byte-idempotent; two preset
+reimports retained 23 current versions and the second preserved every page byte.
+An unchanged-commit update retained 25 observations and reported 23 effective
+groups with zero pending after select. All publication validators and kernel
+queries passed. Original review records and main Wiki contents were unchanged;
+confidence/reproducibility remained 20 source-reported, 3 experimental, and all
+23 snippet. No GPU execution or publication into the main Wiki occurred.
+
+
+Complete public-repository publication acceptance (2026-10-28): all 14 reviewed
+fixed snapshots passed scan, selection, external-review validation, report,
+build and apply in one separate persistent Wiki. Source-bound selection
+refinements preserved the exact admitted definition set: 4,440 definitions,
+1,988 per-repository effective groups and 1,949 canonical pages (1,941 newly
+managed and eight existing pages retained). The 177 detailed-review defers and
+34 selection-pending entries remained unadmitted. These refined acceptance
+reviews are local audit material; the checked-in read-only archive is unchanged.
+
+Every plan passed same-run reapplication, and all 14 completed plans were then
+reapplied after the shared publication. The complete Wiki working-tree corpus
+remained byte-identical. Final Wiki validation, offline freshness, size and
+kernel-query coverage checks passed. Development regression passed all 325 tests
+in 216.762s, including a multi-branch PR attribution regression with positive and
+negative cases. FlashInfer's 3,490 matcher hints and their IDs were identical
+before and after the ownership-set optimization. Two upstream WGMMA figure
+anchors were verified against the official PTX ISA 9.4 document and added to the
+offline link contract.
+
+The development Wiki corpus, active registry and original review archive remain
+unchanged. Generated acceptance pages, source checkouts, local orchestration
+tools and run histories are outside the development checkout. No GPU execution
+or performance verification was performed.

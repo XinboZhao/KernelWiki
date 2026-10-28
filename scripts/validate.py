@@ -43,9 +43,12 @@ HOPPER_ARCHITECTURES = architecture_family_values("hopper")
 BLACKWELL_ARCHITECTURES = architecture_family_values("blackwell")
 
 # Offline contract for curated wiki/source-doc links into NVIDIA's rolling PTX
-# ISA. Each fragment was resolved against PTX ISA 9.3 on 2026-08-19.
+# ISA. Original fragments were resolved against PTX ISA 9.3 on 2026-08-19;
+# upstream WGMMA figure anchors were verified against PTX ISA 9.4 on 2026-10-28.
 PTX_ISA_CURATED_ANCHORS = frozenset({
     "tensor-memory",
+    "wgmma-64n8-a",
+    "wgmma-64n8-d",
     "tensorcore-5th-generation-instructions",
     "tcgen05-memory-alloc-manage-instructions",
     "parallel-synchronization-and-communication-instructions-clusterlaunchcontrol-try-cancel",

@@ -115,7 +115,7 @@ def prepare_review(root, run, snapshot, inventory, selection=None, *, fresh_revi
                          'evidence': [hint['evidence']]}
                         for hint in matches[candidate['candidate_id']]
                         if hint['kind'] == 'registry' and hint['implementation_id'] == identity]
-                    reused['overlap_resolutions'] += reuse_distinct_comparisons(version['decision'], matches[candidate['candidate_id']])
+                    reused['overlap_resolutions'] += reuse_distinct_comparisons(version['decision'], matches[candidate['candidate_id']], request)
                     break
         if not reused and candidate['content_digest'] in prior_exclusions:
             reused = {**prior_exclusions[candidate['content_digest']], 'candidate_id': candidate['candidate_id']}

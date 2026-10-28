@@ -254,6 +254,56 @@ class OverlapTests(unittest.TestCase):
             self.assertIn('pr-fixture-1', (run / 'staging' / page).read_text())
             self.assertNotIn('wiki/kernels/one.md', [record['path'] for record in plan['files']])
 
+    def test_existing_unlinked_target_can_receive_reviewed_multi_branch_pr_attribution(self):
+        from repo_import.decisions import validate_decisions
+        with tempfile.TemporaryDirectory() as directory:
+            wiki, repo, _, _ = prepared(Path(directory))
+            self.pr_fixture(wiki, repo)
+            target = wiki / 'wiki/kernels/target.md'
+            target.write_text(markdown(
+                {'id': 'kernel-target', 'title': 'Known implementation', 'repo': repo.as_uri(),
+                 'changed_paths': ['kernel.py'], 'sources': [], 'reproducibility': 'snippet'},
+                '# Existing implementation, not previously attributed to this PR\n'))
+            other = wiki / 'wiki/kernels/other.md'
+            other.write_text(markdown(
+                {'id': 'kernel-other', 'title': 'Other PR branch',
+                 'sources': ['pr-fixture-1'], 'reproducibility': 'snippet'}, '# Different operation\n'))
+            other_before = other.read_bytes()
+            run = import_repo.prepare(wiki, str(repo), 'HEAD', load_config(wiki))
+            request = read(run / 'review-request.yaml')
+            decision = resolve_review(request, admission(request), 'distinct')
+            decision.update(action='attach_source', relation='exact_duplicate', target_page_id='kernel-target',
+                            equivalence_basis='Source comparison identifies the existing target, not the other PR branch.',
+                            target_evidence=[{'path': 'wiki/kernels/target.md', 'sha256': file_hash(target),
+                                              'locator': 'Existing implementation'}])
+            hints = {h['match_id']: h for h in request['matches'][decision['candidate_id']]}
+            for resolution in decision['overlap_resolutions']:
+                hint = hints[resolution['match_id']]
+                if hint['kind'] == 'pr' or hint.get('page_id') == 'kernel-target':
+                    resolution.update(outcome='same_implementation', representative='kernel-target')
+            selected, pending = validate_decisions(document(request, decision), request, wiki,
+                                                  Path(request['snapshot']['checkout']))
+            self.assertEqual((1, []), (len(selected), pending))
+            for omitted in ('kernel-target', 'kernel-other'):
+                with self.subTest(omitted=omitted):
+                    changed = copy.deepcopy(decision)
+                    changed['overlap_resolutions'] = [r for r in changed['overlap_resolutions']
+                        if hints[r['match_id']].get('page_id') != omitted]
+                    selected, pending = validate_decisions(document(request, changed), request, wiki,
+                                                          Path(request['snapshot']['checkout']))
+                    self.assertEqual((0, 1), (len(selected), len(pending)))
+            changed = copy.deepcopy(decision)
+            next(r for r in changed['overlap_resolutions']
+                 if hints[r['match_id']].get('page_id') == 'kernel-other').update(
+                     outcome='same_implementation', representative='kernel-target')
+            selected, pending = validate_decisions(document(request, changed), request, wiki,
+                                                  Path(request['snapshot']['checkout']))
+            self.assertEqual((0, 1), (len(selected), len(pending)))
+            self.publish_unit(wiki, run, request, [decision])
+            self.assertIn('pr-fixture-1', target.read_text())
+            self.assertEqual(other_before, other.read_bytes())
+            self.assertFalse((wiki / 'wiki/kernels/imported').exists())
+
     def test_changed_pr_asset_invalidates_context(self):
         with tempfile.TemporaryDirectory() as directory:
             wiki, repo, _, _ = prepared(Path(directory))

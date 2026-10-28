@@ -95,6 +95,8 @@ def overlap_index(candidates, registered, pages, owners=None, discoveries=None):
     result = {c['candidate_id']: [] for c in candidates}
     page_map = {p['page_id']: p for p in pages}
     registered_pages = {item['page_id'] for item in registered['implementations'].values()}
+    managed_pages = {item['page_id'] for item in registered['implementations'].values()
+                     if item.get('managed', True)}
     def append(candidate, hint):
         hint['match_id'] = 'overlap-' + digest({'candidate': candidate['candidate_id'], **hint})[:24]
         result[candidate['candidate_id']].append(hint)
@@ -126,7 +128,7 @@ def overlap_index(candidates, registered, pages, owners=None, discoveries=None):
         meaningful_stem = meaningful_source_stem(candidate['path'])
         for page in pages:
             if page['page_id'] in registered_pages and (any(hint.get('page_id') == page['page_id'] for hint in result[candidate['candidate_id']]) or
-                    any(item['page_id'] == page['page_id'] and item.get('managed', True) for item in registered['implementations'].values())):
+                    page['page_id'] in managed_pages):
                 continue
             same_repo = bool(page['repo']) and repo_name(page['repo']) == repo_name(candidate['origin']['repo'])
             matching = [asset for asset in page['code_assets'] if

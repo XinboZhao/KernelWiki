@@ -220,6 +220,8 @@ def build_plan(root, run, request, document, selected):
                       '\n', outputs[page_path], flags=re.DOTALL).rstrip()
         section = member_section(implementation)
         outputs[page_path] = text + ('\n\n' + section if section else '') + '\n'
+        implementation['page_receipt'] = {'path': page_path,
+            'sha256': hashlib.sha256(outputs[page_path].encode()).hexdigest()}
         representative = implementation['versions'][implementation['current_version']]
         if 'page_evidence' in representative:
             representative['page_evidence']['sha256'] = hashlib.sha256(outputs[page_path].encode()).hexdigest()

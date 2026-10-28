@@ -147,6 +147,13 @@ the source analysis already completed. Do not replace missing evidence with a
 synthetic root diff, or describe available material not yet reviewed as missing.
 
 Repository membership alone is context, not implementation-overlap evidence.
+An existing canonical target may receive a newly established PR attribution even
+when that PR currently links only other implementation branches. Review the target
+as the same implementation through its own kernel or registry hint, and resolve
+every currently linked canonical page as distinct. Missing comparisons or another
+same-implementation linked page block this path; use the existing shared-source
+canonical rules when several linked pages represent the same implementation.
+
 Prepared PR hints use matching source paths (including historical directories),
 code receipts or meaningful normalized names. Generic module names such as
 `_cute.py`, `_kernels.py`, `_utils.py` and `default.cu` are not name-based overlap evidence,

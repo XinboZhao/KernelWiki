@@ -739,6 +739,10 @@ class ShippedDocumentationContractTests(unittest.TestCase):
         for path in paths:
             body = path.read_text(encoding="utf-8")
             self.assertEqual([], validate.ptx_isa_curated_anchor_errors(body, path))
+        for anchor in ("wgmma-64n8-a", "wgmma-64n8-d"):
+            self.assertEqual([], validate.ptx_isa_curated_anchor_errors(
+                "https://docs.nvidia.com/cuda/parallel-thread-execution/#" + anchor
+            ))
         self.assertTrue(validate.ptx_isa_curated_anchor_errors(
             "https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-alloc"
         ))
